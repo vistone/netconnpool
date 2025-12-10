@@ -1,0 +1,212 @@
+package netconnpool
+
+import (
+	"context"
+	"io"
+	"net"
+	"sync"
+	"time"
+)
+
+// HealthCheckManager 健康检查管理器
+type HealthCheckManager struct {
+	pool     *Pool
+	config   *Config
+	ticker   *time.Ticker
+	stopChan chan struct{}
+	wg       sync.WaitGroup
+	mu       sync.RWMutex
+	running  bool
+}
+
+// NewHealthCheckManager 创建健康检查管理器
+func NewHealthCheckManager(pool *Pool, config *Config) *HealthCheckManager {
+	return &HealthCheckManager{
+		pool:     pool,
+		config:   config,
+		stopChan: make(chan struct{}),
+		running:  false,
+	}
+}
+
+// Start 启动健康检查
+func (h *HealthCheckManager) Start() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.running || !h.config.EnableHealthCheck {
+		return
+	}
+
+	h.running = true
+	h.ticker = time.NewTicker(h.config.HealthCheckInterval)
+
+	h.wg.Add(1)
+	go h.healthCheckLoop()
+}
+
+// Stop 停止健康检查
+func (h *HealthCheckManager) Stop() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if !h.running {
+		return
+	}
+
+	h.running = false
+	if h.ticker != nil {
+		h.ticker.Stop()
+	}
+	close(h.stopChan)
+	h.wg.Wait()
+}
+
+// healthCheckLoop 健康检查循环
+func (h *HealthCheckManager) healthCheckLoop() {
+	defer h.wg.Done()
+
+	for {
+		select {
+		case <-h.stopChan:
+			return
+		case <-h.ticker.C:
+			h.performHealthCheck()
+		}
+	}
+}
+
+// performHealthCheck 执行健康检查
+func (h *HealthCheckManager) performHealthCheck() {
+	connections := h.pool.getAllConnections()
+
+	// 并发执行健康检查，但限制并发数
+	const maxConcurrentChecks = 10
+	semaphore := make(chan struct{}, maxConcurrentChecks)
+	var wg sync.WaitGroup
+
+	for _, conn := range connections {
+		wg.Add(1)
+		go func(c *Connection) {
+			defer wg.Done()
+			// 获取信号量
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+			h.checkConnection(c)
+		}(conn)
+	}
+
+	wg.Wait()
+}
+
+// checkConnection 检查单个连接
+func (h *HealthCheckManager) checkConnection(conn *Connection) {
+	// 跳过正在使用中的连接
+	conn.mu.RLock()
+	inUse := conn.InUse
+	conn.mu.RUnlock()
+
+	if inUse {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), h.config.HealthCheckTimeout)
+	defer cancel()
+
+	done := make(chan bool, 1)
+	// 使用带缓冲的channel，确保goroutine不会永远阻塞
+	go func() {
+		defer func() {
+			// 防止panic
+			if r := recover(); r != nil {
+				done <- false
+			}
+		}()
+		healthy := h.performCheck(conn.GetConn())
+		select {
+		case done <- healthy:
+		case <-ctx.Done():
+			// 上下文已取消，goroutine可以安全退出
+		}
+	}()
+
+	select {
+	case healthy := <-done:
+		conn.UpdateHealth(healthy)
+		if h.pool.statsCollector != nil {
+			h.pool.statsCollector.IncrementHealthCheckAttempts()
+			if !healthy {
+				h.pool.statsCollector.IncrementHealthCheckFailures()
+				h.pool.statsCollector.IncrementUnhealthyConnections()
+			}
+		}
+	case <-ctx.Done():
+		// 健康检查超时，标记为不健康
+		conn.UpdateHealth(false)
+		if h.pool.statsCollector != nil {
+			h.pool.statsCollector.IncrementHealthCheckAttempts()
+			h.pool.statsCollector.IncrementHealthCheckFailures()
+		}
+		// 等待goroutine退出或超时
+		select {
+		case <-done:
+		case <-time.After(100 * time.Millisecond):
+			// 给goroutine一点时间退出
+		}
+	}
+}
+
+// performCheck 执行实际的健康检查
+func (h *HealthCheckManager) performCheck(conn any) bool {
+	// 如果配置了自定义健康检查函数，使用它
+	if h.config.HealthChecker != nil {
+		return h.config.HealthChecker(conn)
+	}
+
+	// 检查是否是UDP连接
+	if udpConn, ok := conn.(*net.UDPConn); ok {
+		// UDP连接的特殊健康检查
+		// UDP是无连接的，不能像TCP那样读取数据来判断健康状态
+		// 我们通过检查连接是否已关闭来判断
+		
+		// 设置极短的读取超时进行探测
+		udpConn.SetReadDeadline(time.Now().Add(1 * time.Millisecond))
+		defer udpConn.SetReadDeadline(time.Time{})
+		
+		// 尝试读取一个字节，如果能读到说明连接正常（即使没有数据也会超时）
+		buf := make([]byte, 1)
+		_, err := udpConn.Read(buf)
+		if err != nil {
+			// 超时错误是正常的，说明连接还活着（只是没有数据）
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				return true
+			}
+			// EOF或其他错误，连接可能已关闭
+			if err == io.EOF {
+				return false
+			}
+			// 对于UDP，其他错误（如连接关闭）也认为不健康
+			// 但有些系统错误可能是正常的，所以我们保守地认为健康
+			return true
+		}
+		// 如果能读到数据，说明连接正常
+		return true
+	}
+
+	// 默认健康检查：尝试类型断言为net.Conn（主要用于TCP）
+	if netConn, ok := conn.(net.Conn); ok {
+		// 尝试读取一个字节（不消耗它）
+		netConn.SetReadDeadline(time.Now().Add(h.config.HealthCheckTimeout))
+		one := make([]byte, 1)
+		_, err := netConn.Read(one)
+		if err == io.EOF {
+			return false
+		}
+		// 重置读取超时
+		netConn.SetReadDeadline(time.Time{})
+		return true
+	}
+
+	// 如果无法进行健康检查，默认认为健康
+	return true
+}

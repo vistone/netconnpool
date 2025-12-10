@@ -1,0 +1,45 @@
+# 编译产物
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.o
+*.a
+
+# Go 编译产物（可执行文件，名称与目录名相同）
+udp
+ipv6
+test
+basic
+advanced
+server
+
+# Go 测试缓存
+*.test
+
+# Go 模块缓存（可选，通常不需要提交）
+# vendor/
+
+# IDE 和编辑器文件
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 日志文件
+*.log
+debug.log
+
+# 临时文件
+*.tmp
+*.temp
+
+# 调试日志文件
+.cursor/
+debug.log
+
