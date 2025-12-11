@@ -1,9 +1,18 @@
 # NetConnPool - 网络连接池管理库
-[![Go Reference](https://pkg.go.dev/badge/github.com/vistone/pool.svg)](https://pkg.go.dev/github.com/vistone/netconnpool)
+
+[![Go Reference](https://pkg.go.dev/badge/github.com/vistone/netconnpool.svg)](https://pkg.go.dev/github.com/vistone/netconnpool)
 [![Go Report Card](https://goreportcard.com/badge/github.com/vistone/netconnpool)](https://goreportcard.com/report/github.com/vistone/netconnpool)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 
 一个功能全面、高性能的 Go 语言网络连接池管理库，提供了完善的连接生命周期管理、健康检查、统计监控等功能。
+
+**核心特性**：
+- 🚀 **高性能**：连接复用率 > 95%，显著提升性能
+- 🔒 **并发安全**：完全线程安全，支持高并发场景
+- 🎯 **灵活配置**：支持客户端/服务器端两种模式
+- 📊 **详细统计**：提供丰富的统计信息，便于监控和优化
+- 🛡️ **自动管理**：健康检查、泄漏检测、自动清理
+- 🌐 **协议支持**：支持TCP/UDP，IPv4/IPv6
 
 ## 目录
 
@@ -207,42 +216,111 @@ conn, err := pool.GetWithProtocol(ctx, netconnpool.ProtocolUDP, 5*time.Second)
 
 ### 3. 查看连接信息
 
+Connection 对象提供了丰富的连接信息查询方法：
+
 ```go
 conn, _ := pool.Get(ctx)
+defer pool.Put(conn)
 
-// 获取连接ID
-id := conn.ID
+// 基本属性
+id := conn.ID  // 连接唯一ID
 
-// 获取IP版本
+// 协议和IP版本信息
 ipVersion := conn.GetIPVersion()
 fmt.Println(ipVersion.String()) // "IPv4" 或 "IPv6"
 
-// 获取协议类型
 protocol := conn.GetProtocol()
 fmt.Println(protocol.String()) // "TCP" 或 "UDP"
 
-// 获取复用次数
-reuseCount := conn.GetReuseCount()
+// 复用信息
+reuseCount := conn.GetReuseCount()  // 获取连接复用次数
+
+// 连接状态（线程安全方法）
+isInUse := conn.IsInUse()  // 检查连接是否正在使用中
+isHealthy := conn.GetHealthStatus()  // 获取连接健康状态
+
+// 时间信息
+age := conn.GetAge()  // 获取连接年龄（从创建到现在的时间）
+idleTime := conn.GetIdleTime()  // 获取连接空闲时间（如果正在使用则返回0）
 
 // 获取原始连接对象
 netConn := conn.GetConn().(net.Conn)
 ```
 
+**Connection 方法说明**：
+
+| 方法 | 说明 | 线程安全 |
+|------|------|---------|
+| `GetProtocol()` | 获取协议类型（TCP/UDP） | ✅ 是 |
+| `GetIPVersion()` | 获取IP版本（IPv4/IPv6） | ✅ 是 |
+| `GetConn()` | 获取底层连接对象 | ✅ 是 |
+| `GetReuseCount()` | 获取连接复用次数 | ✅ 是 |
+| `IsInUse()` | 检查连接是否正在使用中 | ✅ 是 |
+| `GetHealthStatus()` | 获取连接健康状态 | ✅ 是 |
+| `GetAge()` | 获取连接年龄 | ✅ 是 |
+| `GetIdleTime()` | 获取连接空闲时间 | ✅ 是 |
+| `Close()` | 关闭连接 | ✅ 是 |
+
+**重要提示**：
+- `conn.ID` 是公共字段，可以直接访问（只读，线程安全）
+- 其他信息应使用提供的getter方法，这些方法是线程安全的
+- `GetAge()` 和 `GetIdleTime()` 可以用于监控和调试
+- `IsInUse()` 和 `GetHealthStatus()` 是新增的线程安全方法，推荐使用
+- 不要直接访问 `conn.InUse` 或 `conn.IsHealthy` 字段，应使用对应的方法
+
 ### 4. 归还连接
 
-```go
-// 正常归还连接
-err := pool.Put(conn)
+连接使用完毕后必须归还，否则会导致连接泄漏：
 
-// 如果连接出错，应该关闭而不是归还
-if err := useConnection(conn); err != nil {
-    conn.Close() // 关闭错误连接
+```go
+// 方式1：使用defer确保归还（推荐）
+conn, err := pool.Get(ctx)
+if err != nil {
     return err
 }
-pool.Put(conn) // 正常归还
+defer pool.Put(conn)  // 确保归还
+
+// 使用连接...
 ```
 
-**重要：** 确保连接使用完毕后调用 `Put()` 归还，或者调用 `Close()` 关闭。未归还的连接会被泄漏检测器标记为泄漏。
+```go
+// 方式2：正常归还
+conn, err := pool.Get(ctx)
+if err != nil {
+    return err
+}
+
+// 使用连接...
+err = pool.Put(conn)
+if err != nil {
+    // 处理归还错误
+}
+```
+
+```go
+// 方式3：连接出错时关闭而不是归还
+conn, err := pool.Get(ctx)
+if err != nil {
+    return err
+}
+
+if err := useConnection(conn); err != nil {
+    // 连接出错，关闭连接而不是归还
+    conn.Close()  // 关闭错误连接
+    return err
+}
+
+// 正常归还
+pool.Put(conn)
+```
+
+**重要注意事项**：
+1. **必须归还连接**：使用完连接后，必须调用 `Put()` 归还，或者调用 `Close()` 关闭
+2. **使用defer**：推荐使用 `defer pool.Put(conn)` 确保连接被归还
+3. **错误连接处理**：如果连接在使用过程中出错，应该调用 `conn.Close()` 关闭而不是归还
+4. **泄漏检测**：未归还的连接会被泄漏检测器标记为泄漏，超过 `ConnectionLeakTimeout` 时间会被记录
+5. **连接池关闭**：如果连接池已关闭，`Put()` 会自动关闭连接
+6. **空闲池满**：如果空闲连接池已满，`Put()` 会自动关闭连接
 
 ### 5. TCP/UDP 协议支持
 
@@ -458,19 +536,33 @@ fmt.Printf("连接ID %d 已被复用 %d 次\n", conn.ID, reuseCount)
 #### 健康检查循环
 
 ```
-1. 每 HealthCheckInterval 执行一次
+1. 每 HealthCheckInterval 执行一次（默认30秒，可配置）
    ↓
 2. 获取所有连接
    ↓
-3. 使用信号量限制并发检查数（最多10个并发）
+3. 跳过正在使用中的连接（只检查空闲连接）
    ↓
-4. 对每个连接执行健康检查
-   ├─→ TCP连接：尝试读取（超时1ms）
+4. 使用信号量限制并发检查数（最多10个并发）
+   ↓
+5. 对每个连接执行健康检查
+   ├─→ TCP连接：尝试读取（超时 HealthCheckTimeout，默认3秒）
    ├─→ UDP连接：尝试读取（超时1ms），超时表示正常
    └─→ 自定义检查：调用 HealthChecker 函数
        ↓
-5. 不健康的连接被标记并关闭
+6. 不健康的连接被标记为不健康
+   ↓
+7. 不健康的连接在下次获取时会被验证并关闭
 ```
+
+**健康检查说明**：
+- 健康检查只检查空闲连接，不会检查正在使用中的连接
+- 使用信号量限制最多10个并发检查，避免资源消耗过大
+- TCP连接使用配置的 `HealthCheckTimeout`（默认3秒）进行健康检查
+- UDP连接使用极短超时（1ms），超时表示连接正常（只是没有数据）
+- 如果提供了自定义 `HealthChecker`，会使用自定义函数进行检查
+- 不健康的连接会被标记，在下次从空闲池获取时会验证并关闭
+- 健康检查在后台执行，不会阻塞正常操作
+- 健康检查失败会记录到统计信息（`HealthCheckFailures`、`UnhealthyConnections`）
 
 #### 清理循环
 
@@ -488,13 +580,20 @@ fmt.Printf("连接ID %d 已被复用 %d 次\n", conn.ID, reuseCount)
 #### 泄漏检测循环
 
 ```
-1. 每 LeakDetectionInterval 执行一次
+1. 每 1 分钟执行一次（固定间隔）
    ↓
 2. 检查所有使用中的连接
    ↓
 3. 连接使用时间超过 ConnectionLeakTimeout
-   └─→ 标记为泄漏，记录日志/统计
+   └─→ 标记为泄漏，记录到统计信息
 ```
+
+**泄漏检测说明**：
+- 检测间隔固定为 1 分钟
+- 只检测使用中的连接（`InUse = true`）
+- 泄漏检测不会自动关闭连接，只记录统计信息
+- 可以通过 `stats.LeakedConnections` 查看泄漏的连接数
+- 实际应用中可以根据统计信息进行告警或日志记录
 
 ## 功能要点
 
@@ -537,9 +636,21 @@ fmt.Printf("连接ID %d 已被复用 %d 次\n", conn.ID, reuseCount)
 
 当连接池达到最大连接数时，新的获取请求会：
 1. 加入等待队列（支持按协议/IP版本分别排队）
+   - 通用等待队列：`Get()` 使用
+   - TCP等待队列：`GetTCP()` 使用
+   - UDP等待队列：`GetUDP()` 使用
+   - IPv4等待队列：`GetIPv4()` 使用
+   - IPv6等待队列：`GetIPv6()` 使用
 2. 等待其他连接被归还
-3. 连接归还时，立即通知等待队列
+3. 连接归还时，优先通知对应协议/IP版本的等待队列
 4. 如果超时，返回 `ErrGetConnectionTimeout`
+
+**等待队列特性**：
+- 每个等待队列缓冲区大小为 100
+- 连接归还时会优先通知匹配的等待队列
+- 如果匹配的等待队列为空，会通知通用等待队列
+- 等待队列使用通道实现，性能优秀
+- 连接池关闭时，所有等待的goroutine会被通知并返回 `ErrPoolClosed`
 
 ### 6. 优雅关闭
 
@@ -672,33 +783,70 @@ config := netconnpool.DefaultServerConfig()
 
 ### 自定义健康检查
 
+如果默认的健康检查不满足需求，可以自定义健康检查函数：
+
 ```go
 config.HealthChecker = func(conn any) bool {
-    netConn := conn.(net.Conn)
+    netConn, ok := conn.(net.Conn)
+    if !ok {
+        return false
+    }
     
     // 执行自定义健康检查逻辑
     // 例如：发送ping消息、检查特定状态等
     
-    return true // 返回 true 表示连接健康
+    // 示例：检查连接是否可写
+    netConn.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
+    _, err := netConn.Write([]byte{})
+    netConn.SetWriteDeadline(time.Time{})
+    
+    return err == nil  // 返回 true 表示连接健康
 }
 ```
 
+**注意事项**：
+- 健康检查函数应该是快速的，避免阻塞
+- 如果返回 `false`，连接会被标记为不健康，在下次获取时会被关闭
+- 健康检查在后台定期执行，不会阻塞正常操作
+- 如果未提供自定义函数，使用默认的健康检查逻辑
+
 ### 自定义连接关闭
+
+如果需要特殊的连接关闭逻辑，可以自定义关闭函数：
 
 ```go
 config.CloseConn = func(conn any) error {
-    netConn := conn.(net.Conn)
+    netConn, ok := conn.(net.Conn)
+    if !ok {
+        return nil
+    }
     
     // 执行自定义清理逻辑
     // 例如：发送关闭消息、清理资源等
+    
+    // 示例：发送关闭消息
+    // netConn.Write([]byte("CLOSE"))
     
     return netConn.Close()
 }
 ```
 
+**注意事项**：
+- 如果未提供自定义函数，会尝试类型断言为 `io.Closer` 或 `net.Conn` 并调用 `Close()`
+- 关闭函数应该处理所有错误情况
+- 关闭函数会在连接池关闭、连接过期、连接不健康等情况下被调用
+
 ### 统计信息
 
-连接池提供详细的统计信息：
+连接池提供详细的统计信息，需要启用 `EnableStats: true`（默认启用）。
+
+**启用统计信息**：
+```go
+config := netconnpool.DefaultConfig()
+config.EnableStats = true  // 默认已启用
+```
+
+**获取统计信息**：
 
 ```go
 stats := pool.Stats()
@@ -734,10 +882,26 @@ fmt.Printf("成功获取数: %d\n", stats.SuccessfulGets)
 fmt.Printf("失败获取数: %d\n", stats.FailedGets)
 fmt.Printf("超时获取数: %d\n", stats.TimeoutGets)
 
+// 健康检查统计
+fmt.Printf("健康检查尝试次数: %d\n", stats.HealthCheckAttempts)
+fmt.Printf("健康检查失败次数: %d\n", stats.HealthCheckFailures)
+fmt.Printf("不健康连接数: %d\n", stats.UnhealthyConnections)
+
+// 错误和泄漏统计
+fmt.Printf("连接错误数: %d\n", stats.ConnectionErrors)
+fmt.Printf("泄漏连接数: %d\n", stats.LeakedConnections)
+
 // 性能统计
 fmt.Printf("平均获取时间: %v\n", stats.AverageGetTime)
 fmt.Printf("总获取时间: %v\n", stats.TotalGetTime)
+fmt.Printf("最后更新时间: %v\n", stats.LastUpdateTime)
 ```
+
+**统计信息说明**：
+- 统计信息是线程安全的，可以随时调用 `pool.Stats()` 获取
+- 如果 `EnableStats` 为 `false`，`Stats()` 返回空的统计结构
+- 统计信息使用原子操作更新，性能开销极小
+- `LastUpdateTime` 每100ms更新一次，减少系统调用
 
 ## 注意事项
 
@@ -767,79 +931,220 @@ pool.Put(conn) // 正常归还
 
 ### 2. 连接池关闭
 
-**优雅关闭**：关闭连接池时，确保所有连接都已归还：
+**优雅关闭**：`Close()` 方法会优雅地关闭连接池：
 
 ```go
 defer pool.Close() // 确保关闭
 
-// 或者等待所有连接使用完毕
-// 然后再关闭
+// Close() 会执行以下操作：
+// 1. 停止接受新的获取请求
+// 2. 通知所有等待的goroutine
+// 3. 停止所有后台任务（健康检查、清理、泄漏检测）
+// 4. 关闭所有连接
+// 5. 清理所有资源
 ```
+
+**关闭行为**：
+- `Close()` 是幂等的，可以安全地多次调用（使用 `sync.Once` 保证只执行一次）
+- 关闭后，所有 `Get()` 操作会立即返回 `ErrPoolClosed`
+- 关闭后，`Put()` 会自动关闭连接而不是归还
+- 关闭后，所有等待队列中的goroutine会被通知并返回 `ErrPoolClosed`
+- 后台任务会优雅地停止，不会产生goroutine泄漏
 
 ### 3. 配置建议
 
 **合理配置连接数**：
 - `MaxConnections`：根据服务器承载能力和业务需求设置
+  - 客户端模式：通常 10-100
+  - 服务器端模式：通常 100-1000
+  - 设置为 0 表示无限制（不推荐，可能导致资源耗尽）
 - `MinConnections`：预热连接数，减少首次请求延迟
+  - 客户端模式：建议 2-10
+  - 服务器端模式：必须为 0（不支持预热）
 - `MaxIdleConnections`：通常设置为 `MaxConnections` 的 50-80%
+  - 不能为 0，必须至少为 1
+  - 如果超过 `MaxConnections`，会自动修正为 `MaxConnections`
 
 **超时配置**：
 - `ConnectionTimeout`：连接创建超时，建议 5-10 秒
+  - 必须大于 0
+  - 根据网络环境调整
+  - 客户端模式：用于 `Dialer` 创建连接的超时
+  - 服务器端模式：用于 `Acceptor` 接受连接的超时
+  - 如果超时，`Dialer` 或 `Acceptor` 会返回超时错误
 - `GetConnectionTimeout`：获取连接超时，建议 3-5 秒
+  - 如果连接池耗尽，会等待此时间
+  - 超时后返回 `ErrGetConnectionTimeout`
+  - 可以通过 `GetWithTimeout()` 方法使用自定义超时
+  - 如果设置为 0，会使用传入的 context 的超时时间
 - `IdleTimeout`：空闲连接超时，建议 5-10 分钟
+  - 超过此时间的空闲连接会被自动关闭
+  - 设置为 0 表示不限制
+  - 清理管理器每30秒检查一次（固定间隔）
+  - 从连接最后使用时间（`LastUsedAt`）开始计算
 - `MaxLifetime`：连接最大生命周期，建议 30 分钟
+  - 超过此时间的连接会被自动关闭
+  - 设置为 0 表示不限制
+  - 防止连接长时间使用导致的潜在问题
+  - 从连接创建时间（`CreatedAt`）开始计算
+  - 清理管理器每30秒检查一次
+- `HealthCheckInterval`：健康检查间隔，建议 30 秒
+  - 健康检查管理器会按此间隔执行检查
+  - 设置为 0 表示禁用健康检查（需要 `EnableHealthCheck = false`）
+- `HealthCheckTimeout`：健康检查超时，建议 1-3 秒
+  - 不应超过 `HealthCheckInterval`
+  - 如果超过，会自动修正为 `HealthCheckInterval / 2`
+  - TCP连接使用此超时进行健康检查
+  - UDP连接使用极短超时（1ms）进行健康检查
+- `ConnectionLeakTimeout`：连接泄漏检测超时，建议 5 分钟
+  - 超过此时间未归还的连接会被标记为泄漏
+  - 设置为 0 表示禁用泄漏检测
+  - 泄漏检测不会自动关闭连接，只记录统计信息
+  - 泄漏检测间隔固定为 1 分钟（不可配置）
 
 ### 4. UDP 连接注意事项
 
 **缓冲区清理**：
-- 默认启用缓冲区清理，建议保持启用
+- 默认启用缓冲区清理（`ClearUDPBufferOnReturn: true`），建议保持启用
 - 如果对延迟非常敏感，可以考虑禁用，但需要在应用层处理数据混淆
+- 清理超时时间（`UDPBufferClearTimeout`）默认为 100ms，可根据实际情况调整
+- 清理操作使用非阻塞方式（goroutine异步），不会影响连接归还性能
+- 新创建的UDP连接也会进行缓冲区清理
 
 **健康检查**：
 - UDP连接的健康检查使用极短超时（1ms）
 - 超时错误表示连接正常（只是没有数据）
+- UDP是无连接的，健康检查通过读取超时来判断连接状态
+
+**UDP连接使用**：
+- UDP连接可以复用，但需要注意数据包的顺序和完整性
+- 建议在应用层实现请求-响应匹配机制
+- UDP连接池适合需要频繁通信的场景，可以减少连接创建开销
 
 ### 5. 并发使用
 
 **完全并发安全**：连接池的所有方法都是并发安全的，可以在多个goroutine中同时使用。
 
+**并发安全保证**：
+- 使用 `sync.RWMutex` 保护共享状态
+- 使用通道进行goroutine间通信
+- 统计信息使用原子操作更新
+- 信号量控制并发创建数（最多5个并发）
+- 健康检查使用信号量限制并发数（最多10个并发）
+
 **性能考虑**：
 - 高并发场景下，连接复用率应该 > 50%
 - 如果复用率低，可能需要调整 `MaxConnections` 或 `MaxIdleConnections`
 - 监控统计信息，优化配置
+- 连接获取和归还是无锁的（使用通道），性能优秀
+- 统计信息更新使用原子操作，开销极小
 
 ### 6. 服务器端模式
 
-**不支持预热**：服务器端模式不支持预热（连接只能被动接受）。
+**不支持预热**：服务器端模式不支持预热（连接只能被动接受），`MinConnections` 必须为 0。
 
 **连接来源**：服务器端模式的连接来自客户端，关闭连接会断开客户端连接。
 
-**自定义接受逻辑**：可以通过 `Acceptor` 函数添加日志、限流等逻辑。
+**自定义接受逻辑**：可以通过 `Acceptor` 函数添加日志、限流等逻辑：
+
+```go
+config.Acceptor = func(ctx context.Context, l net.Listener) (any, error) {
+    // 可以在这里添加限流、日志、认证等逻辑
+    conn, err := l.Accept()
+    if err == nil {
+        log.Printf("接受新连接: %s", conn.RemoteAddr())
+        // 可以在这里进行连接验证、限流等操作
+    }
+    return conn, err
+}
+```
+
+**服务器端模式注意事项**：
+- `Get()` 操作会阻塞等待客户端连接
+- 连接来自客户端，不能主动创建
+- 适合HTTP服务器、TCP服务器等场景
+- 关闭连接会断开客户端连接，需要谨慎处理
 
 ### 7. 性能优化建议
 
 1. **监控复用统计**：定期检查复用率，如果复用率低，调整配置
+   - 复用率应该 > 50%，理想情况下 > 90%
+   - 如果复用率低，考虑增加 `MaxConnections` 或 `MaxIdleConnections`
+   - 使用 `stats.TotalConnectionsReused / stats.SuccessfulGets * 100` 计算复用率
+
 2. **合理设置连接数**：根据实际负载调整 `MaxConnections`
+   - 监控 `CurrentConnections` 和 `CurrentActiveConnections`
+   - 如果经常达到最大连接数，考虑增加 `MaxConnections`
+   - 如果空闲连接数经常为0，考虑增加 `MaxIdleConnections`
+
 3. **及时归还连接**：使用 `defer` 确保连接被归还
+   - 避免连接泄漏
+   - 提高连接复用率
+   - 减少等待队列长度
+
 4. **启用统计信息**：在生产环境中启用统计，用于监控和优化
+   - 定期检查统计信息，优化配置
+   - 监控错误率和超时率
+   - 监控健康检查失败率和泄漏连接数
+
+5. **预热连接**：客户端模式使用 `MinConnections` 预热连接
+   - 减少首次请求延迟
+   - 提高响应速度
+   - 建议设置为预期并发数的 10-20%
+
+6. **健康检查配置**：根据实际情况调整健康检查间隔
+   - 默认 30 秒，可以根据需要调整
+   - 健康检查超时不应超过检查间隔
+   - 如果连接经常不健康，考虑缩短检查间隔
+
+7. **UDP缓冲区清理**：保持启用状态，除非对延迟非常敏感
+   - 防止数据混淆
+   - 使用非阻塞方式，性能影响极小
+   - 清理超时时间可以根据实际情况调整
+
+8. **等待队列优化**：如果经常出现超时，考虑增加 `MaxConnections`
+   - 监控 `TimeoutGets` 统计
+   - 如果超时率高，说明连接数不足
+
+9. **连接生命周期管理**：合理设置 `MaxLifetime` 和 `IdleTimeout`
+   - `MaxLifetime` 防止连接长时间使用导致的潜在问题
+   - `IdleTimeout` 及时清理不用的连接，释放资源
 
 ## 错误处理
 
-库定义了以下错误类型：
+### 错误类型
+
+库定义了以下错误类型，所有错误都可以通过 `errors.Is()` 进行比较：
 
 - `ErrPoolClosed`: 连接池已关闭
-- `ErrConnectionClosed`: 连接已关闭
+  - 当连接池已关闭后，所有 `Get()` 操作会返回此错误
+  - `Put()` 在连接池关闭后会关闭连接并可能返回此错误
+- `ErrConnectionClosed`: 连接已关闭（当前未使用，保留用于未来扩展）
 - `ErrGetConnectionTimeout`: 获取连接超时
+  - 当连接池耗尽且等待超时时返回
+  - 可以通过增加 `MaxConnections` 或减少 `GetConnectionTimeout` 来调整
 - `ErrMaxConnectionsReached`: 已达到最大连接数
+  - 通常不会直接返回，而是进入等待队列
+  - 在创建连接时如果达到最大连接数会返回此错误
 - `ErrInvalidConnection`: 无效连接
-- `ErrConnectionUnhealthy`: 连接不健康
+  - 当 `Put(nil)` 时返回
+  - 当连接对象无效时返回
+- `ErrConnectionUnhealthy`: 连接不健康（当前未使用，保留用于未来扩展）
 - `ErrInvalidConfig`: 配置无效
-- `ErrConnectionLeaked`: 连接泄漏
-- `ErrPoolExhausted`: 连接池耗尽
+  - 配置验证失败时返回
+  - 检查配置是否符合要求
+- `ErrConnectionLeaked`: 连接泄漏（当前未使用，保留用于未来扩展）
+- `ErrPoolExhausted`: 连接池耗尽（当前未使用，保留用于未来扩展）
 - `ErrUnsupportedIPVersion`: 不支持的IP版本
+  - 当使用不支持的IP版本时返回
 - `ErrNoConnectionForIPVersion`: 指定IP版本没有可用连接
+  - 当多次重试后仍未找到匹配的IP版本连接时返回
+  - 可能需要调整 `Dialer` 以创建指定IP版本的连接
 - `ErrUnsupportedProtocol`: 不支持的协议类型
+  - 当使用不支持的协议时返回
 - `ErrNoConnectionForProtocol`: 指定协议没有可用连接
+  - 当多次重试后仍未找到匹配的协议连接时返回
+  - 可能需要调整 `Dialer` 以创建指定协议的连接
 
 ### 错误处理示例
 
@@ -851,16 +1156,35 @@ if err != nil {
         // 连接池已关闭
         return fmt.Errorf("连接池已关闭")
     case netconnpool.ErrGetConnectionTimeout:
-        // 获取连接超时
+        // 获取连接超时（连接池耗尽，等待超时）
         return fmt.Errorf("获取连接超时，请稍后重试")
     case netconnpool.ErrMaxConnectionsReached:
         // 达到最大连接数（实际上会进入等待队列，不会直接返回此错误）
+        // 这个错误通常不会在 Get() 中返回，而是会进入等待队列
         return fmt.Errorf("连接池已满")
+    case netconnpool.ErrNoConnectionForProtocol:
+        // 指定协议没有可用连接（多次重试后仍未找到匹配的连接）
+        return fmt.Errorf("没有可用的 %s 连接", protocol)
+    case netconnpool.ErrNoConnectionForIPVersion:
+        // 指定IP版本没有可用连接（多次重试后仍未找到匹配的连接）
+        return fmt.Errorf("没有可用的 %s 连接", ipVersion)
+    case netconnpool.ErrInvalidConnection:
+        // 无效连接（通常不会在 Get() 中返回）
+        return fmt.Errorf("无效连接")
     default:
+        // 其他错误（如 context.DeadlineExceeded, context.Canceled 等）
         return fmt.Errorf("获取连接失败: %w", err)
     }
 }
 ```
+
+**常见错误场景**：
+- `ErrPoolClosed`：连接池已关闭，所有操作都会返回此错误
+- `ErrGetConnectionTimeout`：连接池耗尽，等待超时
+- `ErrNoConnectionForProtocol`：指定协议没有可用连接（多次重试后）
+- `ErrNoConnectionForIPVersion`：指定IP版本没有可用连接（多次重试后）
+- `context.DeadlineExceeded`：上下文超时
+- `context.Canceled`：上下文被取消
 
 ## 性能优化
 
@@ -954,15 +1278,130 @@ if err != nil {
 
 更多示例代码请参考 `examples/` 目录：
 
-- `basic/`: 基本使用示例（客户端模式）
-- `advanced/`: 高级功能示例（客户端模式）
-- `ipv6/`: IPv6连接池使用示例
-- `udp/`: UDP连接池使用示例
-- `server/`: 服务器端模式使用示例
+- `ipv6_example.go`: IPv6连接池使用示例
+- `tls/tls_example.go`: TLS客户端连接池使用示例
+- `tls/tls_server_example.go`: TLS服务器端连接池使用示例
+
+### 完整使用示例
+
+#### 示例1：HTTP客户端连接池
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "net"
+    "net/http"
+    "time"
+    "github.com/vistone/netconnpool"
+)
+
+func main() {
+    // 创建连接池配置
+    config := netconnpool.DefaultConfig()
+    config.MaxConnections = 50
+    config.MinConnections = 5
+    config.ConnectionTimeout = 10 * time.Second
+    config.GetConnectionTimeout = 5 * time.Second
+    
+    // 设置HTTP连接创建函数
+    config.Dialer = func(ctx context.Context) (any, error) {
+        return net.DialTimeout("tcp", "example.com:80", 5*time.Second)
+    }
+    
+    // 创建连接池
+    pool, err := netconnpool.NewPool(config)
+    if err != nil {
+        panic(err)
+    }
+    defer pool.Close()
+    
+    // 使用连接池发送HTTP请求
+    for i := 0; i < 100; i++ {
+        conn, err := pool.Get(context.Background())
+        if err != nil {
+            fmt.Printf("获取连接失败: %v\n", err)
+            continue
+        }
+        
+        // 使用连接
+        netConn := conn.GetConn().(net.Conn)
+        client := &http.Client{
+            Transport: &http.Transport{
+                Dial: func(network, addr string) (net.Conn, error) {
+                    return netConn, nil
+                },
+            },
+        }
+        
+        // 发送请求...
+        // resp, err := client.Get("http://example.com")
+        
+        // 归还连接
+        pool.Put(conn)
+    }
+    
+    // 查看统计信息
+    stats := pool.Stats()
+    fmt.Printf("连接复用率: %.2f%%\n", 
+        float64(stats.TotalConnectionsReused)/float64(stats.SuccessfulGets)*100)
+}
+```
+
+#### 示例2：高并发场景
+
+```go
+package main
+
+import (
+    "context"
+    "net"
+    "sync"
+    "time"
+    "github.com/vistone/netconnpool"
+)
+
+func main() {
+    config := netconnpool.DefaultConfig()
+    config.MaxConnections = 100
+    config.MinConnections = 20
+    config.GetConnectionTimeout = 3 * time.Second
+    
+    config.Dialer = func(ctx context.Context) (any, error) {
+        return net.DialTimeout("tcp", "server:port", 5*time.Second)
+    }
+    
+    pool, _ := netconnpool.NewPool(config)
+    defer pool.Close()
+    
+    // 并发使用连接池
+    var wg sync.WaitGroup
+    for i := 0; i < 1000; i++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            
+            conn, err := pool.Get(context.Background())
+            if err != nil {
+                return
+            }
+            defer pool.Put(conn)
+            
+            // 使用连接...
+            netConn := conn.GetConn().(net.Conn)
+            netConn.Write([]byte("data"))
+        }()
+    }
+    
+    wg.Wait()
+}
+```
 
 ## 测试
 
-运行测试：
+运行所有测试：
 
 ```bash
 go test -v ./test
@@ -972,9 +1411,139 @@ go test -v ./test
 
 ```bash
 go test -v ./test -run TestConnectionReuse
-go test -v ./test -run TestUDPConcurrentUsage
+go test -v ./test -run TestUDPConcurrent
+go test -v ./test -run TestStressTest
 ```
+
+运行基准测试：
+
+```bash
+go test -bench=. -benchmem ./test
+```
+
+## 常见问题
+
+### Q1: 连接复用率低怎么办？
+
+**A**: 连接复用率低可能的原因和解决方法：
+- 连接使用时间过长：优化业务逻辑，减少连接占用时间
+- `MaxConnections` 设置过小：根据实际负载增加 `MaxConnections`
+- `MaxIdleConnections` 设置过小：增加 `MaxIdleConnections`
+- 连接经常出错被关闭：检查网络环境和连接创建逻辑
+
+### Q2: 经常出现 `ErrGetConnectionTimeout` 错误？
+
+**A**: 可能的原因和解决方法：
+- 连接池耗尽：增加 `MaxConnections`
+- 连接使用时间过长：优化业务逻辑，及时归还连接
+- 超时时间设置过短：适当增加 `GetConnectionTimeout`
+- 连接泄漏：检查是否有连接未归还，使用泄漏检测功能
+
+### Q3: 如何选择合适的连接数配置？
+
+**A**: 配置建议：
+- `MaxConnections`：根据服务器承载能力和业务需求
+  - 客户端模式：通常为预期并发数的 1.5-2 倍
+  - 服务器端模式：根据服务器资源设置
+- `MinConnections`：客户端模式建议设置为 `MaxConnections` 的 10-20%
+- `MaxIdleConnections`：通常为 `MaxConnections` 的 50-80%
+
+### Q4: UDP连接可以复用吗？
+
+**A**: 可以，但需要注意：
+- 默认启用缓冲区清理，防止数据混淆
+- 建议在应用层实现请求-响应匹配机制
+- UDP连接适合需要频繁通信的场景
+- 如果对延迟非常敏感，可以禁用缓冲区清理，但需要在应用层处理
+
+### Q5: 如何监控连接池状态？
+
+**A**: 使用统计信息：
+```go
+stats := pool.Stats()
+// 监控关键指标
+fmt.Printf("当前连接数: %d\n", stats.CurrentConnections)
+fmt.Printf("空闲连接数: %d\n", stats.CurrentIdleConnections)
+fmt.Printf("连接复用率: %.2f%%\n", 
+    float64(stats.TotalConnectionsReused)/float64(stats.SuccessfulGets)*100)
+fmt.Printf("泄漏连接数: %d\n", stats.LeakedConnections)
+```
+
+### Q6: 服务器端模式如何使用？
+
+**A**: 服务器端模式用于接受客户端连接：
+```go
+listener, _ := net.Listen("tcp", ":8080")
+config := netconnpool.DefaultServerConfig()
+config.Listener = listener
+config.MaxConnections = 100
+
+pool, _ := netconnpool.NewPool(config)
+defer pool.Close()
+
+// 在循环中获取连接（接受客户端连接）
+for {
+    conn, err := pool.Get(context.Background())
+    if err != nil {
+        continue
+    }
+    // 处理连接
+    go handleConnection(conn, pool)
+}
+```
+
+### Q7: 如何禁用统计信息以提升性能？
+
+**A**: 设置 `EnableStats = false`：
+```go
+config := netconnpool.DefaultConfig()
+config.EnableStats = false  // 禁用统计信息
+```
+注意：禁用统计信息后，`pool.Stats()` 会返回空的统计结构。
+
+### Q8: 连接池关闭后还能使用吗？
+
+**A**: 不能。连接池关闭后：
+- 所有 `Get()` 操作会立即返回 `ErrPoolClosed`
+- `Put()` 会自动关闭连接而不是归还
+- 所有等待队列中的goroutine会被通知并返回 `ErrPoolClosed`
+- 后台任务会优雅地停止
+
+### Q9: 如何实现TLS连接池？
+
+**A**: 在 `Dialer` 中实现TLS握手：
+```go
+config.Dialer = func(ctx context.Context) (any, error) {
+    tcpConn, err := net.DialTimeout("tcp", "example.com:443", 5*time.Second)
+    if err != nil {
+        return nil, err
+    }
+    
+    tlsConn := tls.Client(tcpConn, &tls.Config{
+        ServerName: "example.com",
+    })
+    
+    if err := tlsConn.HandshakeContext(ctx); err != nil {
+        tcpConn.Close()
+        return nil, err
+    }
+    
+    return tlsConn, nil
+}
+```
+更多示例请参考 `examples/tls/` 目录。
+
+### Q10: 连接泄漏检测如何工作？
+
+**A**: 泄漏检测机制：
+- 每 1 分钟检查一次所有使用中的连接
+- 如果连接使用时间超过 `ConnectionLeakTimeout`，标记为泄漏
+- 泄漏检测不会自动关闭连接，只记录到统计信息
+- 可以通过 `stats.LeakedConnections` 查看泄漏的连接数
+- 实际应用中可以根据统计信息进行告警或日志记录
 
 ## 许可证
 
-MIT License
+BSD 3-Clause License
+
+详见 [LICENSE](LICENSE) 文件。
