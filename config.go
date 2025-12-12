@@ -36,15 +36,15 @@ import (
 
 // Dialer 连接创建函数类型（客户端模式）
 // 返回网络连接和错误
-type Dialer func(ctx context.Context) (any, error)
+type Dialer func(ctx context.Context) (net.Conn, error)
 
 // Acceptor 连接接受函数类型（服务器端模式）
 // 从Listener接受新连接，返回网络连接和错误
-type Acceptor func(ctx context.Context, listener net.Listener) (any, error)
+type Acceptor func(ctx context.Context, listener net.Listener) (net.Conn, error)
 
 // HealthChecker 健康检查函数类型
 // 返回连接是否健康
-type HealthChecker func(conn any) bool
+type HealthChecker func(conn net.Conn) bool
 
 // Config 连接池配置
 type Config struct {
@@ -101,7 +101,16 @@ type Config struct {
 
 	// CloseConn 连接关闭函数（可选）
 	// 如果为nil，将尝试类型断言为io.Closer并调用Close方法
-	CloseConn func(conn any) error
+	CloseConn func(conn net.Conn) error
+
+	// OnCreated 连接创建后调用
+	OnCreated func(conn net.Conn) error
+
+	// OnBorrow 连接从池中取出前调用
+	OnBorrow func(conn net.Conn)
+
+	// OnReturn 连接归还池中前调用
+	OnReturn func(conn net.Conn)
 
 	// EnableStats 是否启用统计信息
 	EnableStats bool
@@ -117,6 +126,10 @@ type Config struct {
 	// UDPBufferClearTimeout UDP缓冲区清理超时时间
 	// 如果为0，将使用默认值100ms
 	UDPBufferClearTimeout time.Duration
+
+	// MaxBufferClearPackets UDP缓冲区清理最大包数
+	// 默认值: 100
+	MaxBufferClearPackets int
 }
 
 // DefaultConfig 返回默认配置（客户端模式）
@@ -137,6 +150,7 @@ func DefaultConfig() *Config {
 		EnableHealthCheck:      true,
 		ClearUDPBufferOnReturn: true,                   // 默认启用UDP缓冲区清理
 		UDPBufferClearTimeout:  100 * time.Millisecond, // 默认100ms超时
+		MaxBufferClearPackets:  100,                    // 默认清理100个包
 	}
 }
 
@@ -158,6 +172,7 @@ func DefaultServerConfig() *Config {
 		EnableHealthCheck:      true,
 		ClearUDPBufferOnReturn: true,
 		UDPBufferClearTimeout:  100 * time.Millisecond,
+		MaxBufferClearPackets:  100,
 	}
 }
 
@@ -203,11 +218,14 @@ func (c *Config) Validate() error {
 		// 健康检查超时不应超过检查间隔
 		c.HealthCheckTimeout = c.HealthCheckInterval / 2
 	}
+	if c.MaxBufferClearPackets <= 0 {
+		c.MaxBufferClearPackets = 100
+	}
 	return nil
 }
 
 // defaultAcceptor 默认的连接接受函数
-func defaultAcceptor(ctx context.Context, listener net.Listener) (any, error) {
+func defaultAcceptor(ctx context.Context, listener net.Listener) (net.Conn, error) {
 	// 使用带超时的Accept
 	type result struct {
 		conn net.Conn

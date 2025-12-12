@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"time"
@@ -11,6 +12,10 @@ import (
 )
 
 func main() {
+	// 启动一个简单的 IPv6 TCP 服务器
+	go startIPv6Server()
+	time.Sleep(100 * time.Millisecond) // 等待服务器启动
+
 	// 创建支持IPv6的配置
 	config := netconnpool.DefaultConfig()
 	config.MaxConnections = 20
@@ -18,7 +23,7 @@ func main() {
 	config.EnableStats = true
 
 	// IPv6连接创建函数
-	config.Dialer = func(ctx context.Context) (any, error) {
+	config.Dialer = func(ctx context.Context) (net.Conn, error) {
 		// 连接到IPv6地址（使用::1表示本地IPv6地址）
 		return net.DialTimeout("tcp6", "[::1]:8080", 5*time.Second)
 	}
@@ -38,9 +43,9 @@ func main() {
 		log.Printf("获取IPv6连接失败: %v", err)
 	} else {
 		fmt.Printf("成功获取IPv6连接: %s\n", conn.GetIPVersion().String())
-		if netConn, ok := conn.GetConn().(net.Conn); ok {
-			fmt.Printf("远程地址: %s\n", netConn.RemoteAddr())
-		}
+		// GetConn 现在直接返回 net.Conn，不需要类型断言
+		netConn := conn.GetConn()
+		fmt.Printf("远程地址: %s\n", netConn.RemoteAddr())
 		pool.Put(conn)
 	}
 
@@ -53,3 +58,22 @@ func main() {
 	fmt.Printf("  当前IPv6空闲连接数: %d\n", stats.CurrentIPv6IdleConnections)
 }
 
+func startIPv6Server() {
+	listener, err := net.Listen("tcp6", "[::1]:8080")
+	if err != nil {
+		log.Printf("IPv6 Server error: %v", err)
+		return
+	}
+	defer listener.Close()
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		go func(c net.Conn) {
+			defer c.Close()
+			io.Copy(c, c)
+		}(conn)
+	}
+}

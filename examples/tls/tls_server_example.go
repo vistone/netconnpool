@@ -2,49 +2,42 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"fmt"
 	"log"
+	"math/big"
 	"net"
 	"time"
 
 	"github.com/vistone/netconnpool"
 )
 
-func mainServer() {
+func main() {
 	fmt.Println("=== TLS服务器端连接池示例 ===")
 
-	// 注意：这只是一个演示示例，生产环境需要真实的证书和私钥
-	// 可以使用 self-signed 证书进行测试
+	// 生成自签名证书
+	cert, err := generateSelfSignedCert()
+	if err != nil {
+		log.Fatalf("生成证书失败: %v", err)
+	}
 
-	// 加载TLS证书（示例，实际使用时需要真实的证书文件）
-	// cert, err := tls.LoadX509KeyPair("server.crt", "server.key")
-	// if err != nil {
-	//     log.Fatalf("加载证书失败: %v", err)
-	// }
-
-	// 为演示目的，创建一个自签名证书配置
-	// 实际生产环境应该使用真实的证书
 	tlsConfig := &tls.Config{
-		// Certificates: []tls.Certificate{cert}, // 实际使用时取消注释
-		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			// 返回服务器证书
-			// 实际使用时应该从配置中加载证书
-			log.Printf("客户端请求连接: %s", hello.ServerName)
-			// 这里应该返回真实的证书
-			return nil, fmt.Errorf("未实现证书加载")
-		},
-		MinVersion: tls.VersionTLS12,
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
 	}
 
 	// 创建TLS监听器
-	listener, err := tls.Listen("tcp", ":8443", tlsConfig)
+	listener, err := tls.Listen("tcp", "127.0.0.1:8443", tlsConfig)
 	if err != nil {
 		log.Fatalf("创建TLS监听器失败: %v", err)
 	}
 	defer listener.Close()
 
-	fmt.Println("TLS服务器监听在 :8443")
+	fmt.Println("TLS服务器监听在 127.0.0.1:8443")
 
 	// 创建服务器端连接池配置
 	config := netconnpool.DefaultServerConfig()
@@ -52,7 +45,7 @@ func mainServer() {
 	config.MaxConnections = 100
 
 	// 自定义Acceptor（可选，默认即可使用）
-	config.Acceptor = func(ctx context.Context, l net.Listener) (any, error) {
+	config.Acceptor = func(ctx context.Context, l net.Listener) (net.Conn, error) {
 		// 对于TLS服务器，Listener已经是tls.Listener
 		// 直接Accept即可获得TLS连接
 		conn, err := l.Accept()
@@ -67,17 +60,19 @@ func mainServer() {
 			return nil, fmt.Errorf("接受的连接不是TLS连接")
 		}
 
-		// TLS握手在Accept时自动完成
-		state := tlsConn.ConnectionState()
-		fmt.Printf("接受TLS连接: %s, TLS版本=%s\n",
-			tlsConn.RemoteAddr(),
-			tlsVersionStringServer(state.Version))
+		// TLS握手在Accept时自动完成（或者在第一次Read/Write时）
+		// 这里我们强制握手以获取连接状态
+		// 注意：在实际高并发场景中，最好不要在Acceptor中做耗时操作
+		// 这里为了演示目的
+		// err = tlsConn.Handshake()
+		// 实际上 tls.Listener.Accept() 返回的连接在 Read/Write 时会自动握手
+		// 如果想立即握手，可以在这里调用，但要注意超时
 
 		return tlsConn, nil
 	}
 
 	// 自定义健康检查
-	config.HealthChecker = func(conn any) bool {
+	config.HealthChecker = func(conn net.Conn) bool {
 		tlsConn, ok := conn.(*tls.Conn)
 		if !ok {
 			return false
@@ -85,6 +80,10 @@ func mainServer() {
 
 		state := tlsConn.ConnectionState()
 		if !state.HandshakeComplete {
+			// 如果还没握手，可能是不健康的，或者还没开始使用
+			// 对于服务器端被动接受的连接，如果还没握手完成，可能不应该视为健康
+			// 但这里简单起见，如果没握手，我们认为它还在初始化中，或者...
+			// 实际上，服务器端连接池通常用于复用已经建立的连接
 			return false
 		}
 
@@ -109,21 +108,36 @@ func mainServer() {
 	defer pool.Close()
 
 	fmt.Println("TLS服务器连接池创建成功")
-	fmt.Println("等待客户端连接...")
+
+	// 启动客户端测试
+	go runClient(cert)
 
 	// 服务器运行循环
+	// 运行一段时间后退出，以便测试结束
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	for {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		conn, err := pool.Get(ctx)
-		cancel()
+		select {
+		case <-ctx.Done():
+			fmt.Println("测试结束")
+			return
+		default:
+			// 非阻塞尝试获取连接（模拟服务器处理循环）
+			// 注意：Get() 在服务器模式下会阻塞等待新连接
+			// 我们使用带超时的Get
+			getCtx, getCancel := context.WithTimeout(context.Background(), 1*time.Second)
+			conn, err := pool.Get(getCtx)
+			getCancel()
 
-		if err != nil {
-			log.Printf("获取连接失败: %v", err)
-			continue
+			if err != nil {
+				// log.Printf("获取连接超时/失败: %v", err)
+				continue
+			}
+
+			// 处理连接
+			go handleTLSConnection(conn, pool)
 		}
-
-		// 处理连接（在实际应用中，这里应该启动goroutine处理）
-		go handleTLSConnection(conn, pool)
 	}
 }
 
@@ -133,24 +147,45 @@ func handleTLSConnection(conn *netconnpool.Connection, pool *netconnpool.Pool) {
 	tlsConn := conn.GetConn().(*tls.Conn)
 	buf := make([]byte, 1024)
 
-	for {
-		tlsConn.SetReadDeadline(time.Now().Add(30 * time.Second))
-		n, err := tlsConn.Read(buf)
-		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				continue
-			}
-			log.Printf("读取数据失败: %v", err)
-			return
-		}
-
-		// 回显数据
-		_, err = tlsConn.Write(buf[:n])
-		if err != nil {
-			log.Printf("写入数据失败: %v", err)
-			return
-		}
+	tlsConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	n, err := tlsConn.Read(buf)
+	if err != nil {
+		// 客户端关闭或超时
+		return
 	}
+
+	// 回显数据
+	tlsConn.Write(buf[:n])
+	fmt.Printf("服务器收到并回显: %s\n", string(buf[:n]))
+}
+
+func runClient(serverCert tls.Certificate) {
+	time.Sleep(1 * time.Second) // 等待服务器启动
+
+	// 客户端配置，信任服务器证书
+	// 由于是自签名，我们需要将证书添加到RootCAs，或者InsecureSkipVerify
+	// 这里简单起见使用 InsecureSkipVerify，因为我们知道是自签名的
+	clientConfig := &tls.Config{
+		InsecureSkipVerify: true,
+	}
+
+	conn, err := tls.Dial("tcp", "127.0.0.1:8443", clientConfig)
+	if err != nil {
+		log.Printf("客户端连接失败: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	msg := "Hello TLS"
+	conn.Write([]byte(msg))
+
+	buf := make([]byte, 1024)
+	n, err := conn.Read(buf)
+	if err != nil {
+		log.Printf("客户端读取失败: %v", err)
+		return
+	}
+	fmt.Printf("客户端收到: %s\n", string(buf[:n]))
 }
 
 func tlsVersionStringServer(version uint16) string {
@@ -168,3 +203,33 @@ func tlsVersionStringServer(version uint16) string {
 	}
 }
 
+// 生成自签名证书
+func generateSelfSignedCert() (tls.Certificate, error) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			Organization: []string{"Test Org"},
+		},
+		NotBefore: time.Now(),
+		NotAfter:  time.Now().Add(time.Hour),
+
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	return tls.Certificate{
+		Certificate: [][]byte{derBytes},
+		PrivateKey:  priv,
+	}, nil
+}

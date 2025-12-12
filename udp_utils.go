@@ -36,7 +36,7 @@ import (
 
 // ClearUDPReadBuffer 清空UDP连接的读取缓冲区
 // 这对于防止UDP连接在连接池中复用时的数据混淆非常重要
-func ClearUDPReadBuffer(conn any, timeout time.Duration) error {
+func ClearUDPReadBuffer(conn net.Conn, timeout time.Duration, maxPackets int) error {
 	udpConn, ok := conn.(*net.UDPConn)
 	if !ok {
 		// 不是UDP连接，无需清理
@@ -48,7 +48,7 @@ func ClearUDPReadBuffer(conn any, timeout time.Duration) error {
 	if readTimeout <= 0 {
 		readTimeout = 100 * time.Millisecond
 	}
-	
+
 	// 设置整体超时时间点
 	deadline := time.Now().Add(readTimeout)
 	udpConn.SetReadDeadline(deadline)
@@ -56,14 +56,16 @@ func ClearUDPReadBuffer(conn any, timeout time.Duration) error {
 
 	// 持续读取直到缓冲区为空或超时
 	buf := make([]byte, 65507) // UDP最大数据包大小
-	maxReads := 100            // 最多读取100个数据包，避免无限循环
+	if maxPackets <= 0 {
+		maxPackets = 100 // 默认最多读取100个数据包
+	}
 
-	for i := 0; i < maxReads; i++ {
+	for i := 0; i < maxPackets; i++ {
 		// 检查是否已经超过整体超时时间
 		if time.Now().After(deadline) {
 			return nil // 超时，缓冲区应该已清空或无法继续清空
 		}
-		
+
 		// 设置本次读取的超时（使用剩余时间）
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
@@ -75,7 +77,7 @@ func ClearUDPReadBuffer(conn any, timeout time.Duration) error {
 			readDeadline = 50 * time.Millisecond
 		}
 		udpConn.SetReadDeadline(time.Now().Add(readDeadline))
-		
+
 		_, err := udpConn.Read(buf)
 		if err != nil {
 			// 如果是超时错误，说明缓冲区已空
@@ -97,15 +99,15 @@ func ClearUDPReadBuffer(conn any, timeout time.Duration) error {
 
 // ClearUDPReadBufferNonBlocking 非阻塞方式清空UDP读取缓冲区
 // 使用goroutine在后台清理，不阻塞调用者
-func ClearUDPReadBufferNonBlocking(conn any, timeout time.Duration) {
+func ClearUDPReadBufferNonBlocking(conn net.Conn, timeout time.Duration, maxPackets int) {
 	go func() {
-		ClearUDPReadBuffer(conn, timeout)
+		ClearUDPReadBuffer(conn, timeout, maxPackets)
 	}()
 }
 
 // HasUDPDataInBuffer 检查UDP连接读取缓冲区是否有数据
 // 返回true表示可能有数据，false表示缓冲区为空
-func HasUDPDataInBuffer(conn any) bool {
+func HasUDPDataInBuffer(conn net.Conn) bool {
 	udpConn, ok := conn.(*net.UDPConn)
 	if !ok {
 		return false

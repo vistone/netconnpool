@@ -29,6 +29,7 @@
 package netconnpool
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -84,6 +85,7 @@ type Stats struct {
 // StatsCollector 统计收集器
 type StatsCollector struct {
 	stats Stats
+	mu    sync.RWMutex // 保护 LastUpdateTime
 }
 
 // NewStatsCollector 创建统计收集器
@@ -217,7 +219,7 @@ func (s *StatsCollector) GetStats() Stats {
 		AverageReuseCount:          s.calculateAverageReuseCount(),
 		AverageGetTime:             time.Duration(atomic.LoadInt64((*int64)(&s.stats.AverageGetTime))),
 		TotalGetTime:               time.Duration(atomic.LoadInt64((*int64)(&s.stats.TotalGetTime))),
-		LastUpdateTime:             s.stats.LastUpdateTime,
+		LastUpdateTime:             s.getLastUpdateTime(),
 	}
 }
 
@@ -286,10 +288,23 @@ func (s *StatsCollector) calculateAverageReuseCount() float64 {
 }
 
 func (s *StatsCollector) updateTime() {
-	// 减少时间更新频率，每100ms更新一次
+	s.mu.RLock()
+	oldTime := s.stats.LastUpdateTime
+	s.mu.RUnlock()
+
 	now := time.Now()
-	if now.Sub(s.stats.LastUpdateTime) < 100*time.Millisecond {
+	// 减少时间更新频率，每100ms更新一次
+	if now.Sub(oldTime) < 100*time.Millisecond {
 		return
 	}
+
+	s.mu.Lock()
 	s.stats.LastUpdateTime = now
+	s.mu.Unlock()
+}
+
+func (s *StatsCollector) getLastUpdateTime() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.stats.LastUpdateTime
 }

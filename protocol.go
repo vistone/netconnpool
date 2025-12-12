@@ -59,17 +59,15 @@ func (p Protocol) String() string {
 
 // DetectProtocol 检测连接的协议类型
 // 支持TCP和UDP连接
-func DetectProtocol(conn any) Protocol {
-	// 尝试类型断言为net.Conn
-	netConn, ok := conn.(net.Conn)
-	if !ok {
+func DetectProtocol(conn net.Conn) Protocol {
+	if conn == nil {
 		return ProtocolUnknown
 	}
 
 	// 通过地址类型判断协议
-	remoteAddr := netConn.RemoteAddr()
+	remoteAddr := conn.RemoteAddr()
 	if remoteAddr == nil {
-		localAddr := netConn.LocalAddr()
+		localAddr := conn.LocalAddr()
 		if localAddr != nil {
 			return detectProtocolFromAddr(localAddr)
 		}

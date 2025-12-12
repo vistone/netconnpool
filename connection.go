@@ -29,6 +29,7 @@
 package netconnpool
 
 import (
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -45,7 +46,7 @@ type Connection struct {
 	ID uint64
 
 	// Conn 底层连接对象
-	Conn any
+	Conn net.Conn
 
 	// Protocol 协议类型（TCP或UDP）
 	Protocol Protocol
@@ -85,7 +86,7 @@ type Connection struct {
 }
 
 // NewConnection 创建新连接
-func NewConnection(conn any, pool *Pool, onClose func() error) *Connection {
+func NewConnection(conn net.Conn, pool *Pool, onClose func() error) *Connection {
 	now := time.Now()
 	// 自动检测协议类型和IP版本
 	protocol := DetectProtocol(conn)
@@ -108,22 +109,18 @@ func NewConnection(conn any, pool *Pool, onClose func() error) *Connection {
 	}
 }
 
-// GetProtocol 获取连接的协议类型
+// GetProtocol 获取连接的协议类型（无锁，因为Protocol在创建后不会改变）
 func (c *Connection) GetProtocol() Protocol {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	return c.Protocol
 }
 
-// GetIPVersion 获取连接的IP版本
+// GetIPVersion 获取连接的IP版本（无锁，因为IPVersion在创建后不会改变）
 func (c *Connection) GetIPVersion() IPVersion {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	return c.IPVersion
 }
 
 // GetConn 获取底层连接对象
-func (c *Connection) GetConn() any {
+func (c *Connection) GetConn() net.Conn {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.Conn

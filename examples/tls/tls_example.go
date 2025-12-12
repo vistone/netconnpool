@@ -21,7 +21,7 @@ func main() {
 	config.ConnectionTimeout = 10 * time.Second
 
 	// 配置TLS Dialer
-	config.Dialer = func(ctx context.Context) (any, error) {
+	config.Dialer = func(ctx context.Context) (net.Conn, error) {
 		// 创建TCP连接
 		tcpConn, err := net.DialTimeout("tcp", "example.com:443", 5*time.Second)
 		if err != nil {
@@ -30,8 +30,8 @@ func main() {
 
 		// 配置TLS客户端
 		tlsConfig := &tls.Config{
-			ServerName:         "example.com", // SNI（服务器名称指示）
-			InsecureSkipVerify: false,        // 在生产环境中应该为false，验证服务器证书
+			ServerName:         "example.com",    // SNI（服务器名称指示）
+			InsecureSkipVerify: false,            // 在生产环境中应该为false，验证服务器证书
 			MinVersion:         tls.VersionTLS12, // 最小TLS版本
 		}
 
@@ -64,7 +64,7 @@ func main() {
 	}
 
 	// 自定义健康检查（TLS连接）
-	config.HealthChecker = func(conn any) bool {
+	config.HealthChecker = func(conn net.Conn) bool {
 		tlsConn, ok := conn.(*tls.Conn)
 		if !ok {
 			return false
@@ -153,4 +153,3 @@ func tlsVersionString(version uint16) string {
 		return fmt.Sprintf("未知版本 (0x%04x)", version)
 	}
 }
-

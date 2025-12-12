@@ -59,13 +59,12 @@ func (v IPVersion) String() string {
 // DetectIPVersion 检测连接的IP版本
 // 如果conn是net.Conn类型，则检测其远程地址的IP版本
 // 否则返回IPVersionUnknown
-func DetectIPVersion(conn any) IPVersion {
-	netConn, ok := conn.(net.Conn)
-	if !ok {
+func DetectIPVersion(conn net.Conn) IPVersion {
+	if conn == nil {
 		return IPVersionUnknown
 	}
 
-	remoteAddr := netConn.RemoteAddr()
+	remoteAddr := conn.RemoteAddr()
 	if remoteAddr == nil {
 		return IPVersionUnknown
 	}

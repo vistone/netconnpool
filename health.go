@@ -185,7 +185,7 @@ func (h *HealthCheckManager) checkConnection(conn *Connection) {
 }
 
 // performCheck 执行实际的健康检查
-func (h *HealthCheckManager) performCheck(conn any) bool {
+func (h *HealthCheckManager) performCheck(conn net.Conn) bool {
 	// 如果配置了自定义健康检查函数，使用它
 	if h.config.HealthChecker != nil {
 		return h.config.HealthChecker(conn)
@@ -196,11 +196,11 @@ func (h *HealthCheckManager) performCheck(conn any) bool {
 		// UDP连接的特殊健康检查
 		// UDP是无连接的，不能像TCP那样读取数据来判断健康状态
 		// 我们通过检查连接是否已关闭来判断
-		
+
 		// 设置极短的读取超时进行探测
 		udpConn.SetReadDeadline(time.Now().Add(1 * time.Millisecond))
 		defer udpConn.SetReadDeadline(time.Time{})
-		
+
 		// 尝试读取一个字节，如果能读到说明连接正常（即使没有数据也会超时）
 		buf := make([]byte, 1)
 		_, err := udpConn.Read(buf)
@@ -221,20 +221,14 @@ func (h *HealthCheckManager) performCheck(conn any) bool {
 		return true
 	}
 
-	// 默认健康检查：尝试类型断言为net.Conn（主要用于TCP）
-	if netConn, ok := conn.(net.Conn); ok {
-		// 尝试读取一个字节（不消耗它）
-		netConn.SetReadDeadline(time.Now().Add(h.config.HealthCheckTimeout))
-		one := make([]byte, 1)
-		_, err := netConn.Read(one)
-		if err == io.EOF {
-			return false
-		}
-		// 重置读取超时
-		netConn.SetReadDeadline(time.Time{})
-		return true
+	// 默认健康检查：尝试读取一个字节（不消耗它）
+	conn.SetReadDeadline(time.Now().Add(h.config.HealthCheckTimeout))
+	one := make([]byte, 1)
+	_, err := conn.Read(one)
+	if err == io.EOF {
+		return false
 	}
-
-	// 如果无法进行健康检查，默认认为健康
+	// 重置读取超时
+	conn.SetReadDeadline(time.Time{})
 	return true
 }
