@@ -112,7 +112,7 @@ func TestPool_GetWithIPVersion_MismatchProtection(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	conn, err := pool.GetWithIPVersion(ctx, IPVersionIPv6, 100*time.Millisecond)
+	conn, err := pool.GetWithIPVersion(ctx, netconnpool.IPVersionIPv6, 100*time.Millisecond)
 	if err == nil {
 		if conn != nil {
 			pool.Put(conn)

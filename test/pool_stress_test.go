@@ -146,18 +146,33 @@ func TestPool_TimeoutHandling(t *testing.T) {
 
 	// 快速获取连接，填满连接池
 	var wg sync.WaitGroup
+	conns := make([]*netconnpool.Connection, 0, 5)
+	var connsMu sync.Mutex
+	
 	for i := 0; i < 5; i++ {
 		wg.Add(1)
-		go func() {
+		go func(id int) {
 			defer wg.Done()
 			conn, err := pool.Get(context.Background())
 			if err != nil {
 				return
 			}
+			connsMu.Lock()
+			conns = append(conns, conn)
+			connsMu.Unlock()
 			// 持有连接一段时间
 			time.Sleep(200 * time.Millisecond)
+			connsMu.Lock()
+			// 安全地移除连接
+			for j := len(conns) - 1; j >= 0; j-- {
+				if conns[j] == conn {
+					conns = append(conns[:j], conns[j+1:]...)
+					break
+				}
+			}
+			connsMu.Unlock()
 			pool.Put(conn)
-		}()
+		}(i)
 	}
 
 	// 等待连接池填满
@@ -165,8 +180,8 @@ func TestPool_TimeoutHandling(t *testing.T) {
 
 	// 尝试获取连接（应该超时）
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
 	conn, err := pool.GetWithTimeout(ctx, 50*time.Millisecond)
-	cancel()
 
 	if err == nil {
 		if conn != nil {
@@ -176,6 +191,15 @@ func TestPool_TimeoutHandling(t *testing.T) {
 	}
 
 	wg.Wait()
+	
+	// 清理可能残留的连接
+	connsMu.Lock()
+	for _, c := range conns {
+		if c != nil {
+			pool.Put(c)
+		}
+	}
+	connsMu.Unlock()
 }
 
 // TestPool_MaxConnectionsLimit 测试最大连接数限制
