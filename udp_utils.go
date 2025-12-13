@@ -34,6 +34,11 @@ import (
 	"time"
 )
 
+var (
+	// udpCleanupSemaphore 限制UDP清理的并发数，防止goroutine泄漏
+	udpCleanupSemaphore = make(chan struct{}, 10)
+)
+
 // ClearUDPReadBuffer 清空UDP连接的读取缓冲区
 // 这对于防止UDP连接在连接池中复用时的数据混淆非常重要
 func ClearUDPReadBuffer(conn net.Conn, timeout time.Duration, maxPackets int) error {
@@ -99,10 +104,24 @@ func ClearUDPReadBuffer(conn net.Conn, timeout time.Duration, maxPackets int) er
 
 // ClearUDPReadBufferNonBlocking 非阻塞方式清空UDP读取缓冲区
 // 使用goroutine在后台清理，不阻塞调用者
+// 使用信号量限制并发数，防止goroutine泄漏
 func ClearUDPReadBufferNonBlocking(conn net.Conn, timeout time.Duration, maxPackets int) {
-	go func() {
-		ClearUDPReadBuffer(conn, timeout, maxPackets)
-	}()
+	select {
+	case udpCleanupSemaphore <- struct{}{}:
+		// 获取到信号量，启动goroutine清理
+		go func() {
+			defer func() { <-udpCleanupSemaphore }()
+			ClearUDPReadBuffer(conn, timeout, maxPackets)
+		}()
+	default:
+		// 如果清理goroutine已满，使用更短的超时时间同步清理
+		// 避免goroutine无限增长
+		shortTimeout := timeout
+		if shortTimeout <= 0 {
+			shortTimeout = 100 * time.Millisecond
+		}
+		ClearUDPReadBuffer(conn, shortTimeout/2, maxPackets)
+	}
 }
 
 // HasUDPDataInBuffer 检查UDP连接读取缓冲区是否有数据

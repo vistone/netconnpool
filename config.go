@@ -235,7 +235,15 @@ func defaultAcceptor(ctx context.Context, listener net.Listener) (net.Conn, erro
 
 	go func() {
 		conn, err := listener.Accept()
-		resultChan <- result{conn: conn, err: err}
+		select {
+		case resultChan <- result{conn: conn, err: err}:
+			// 成功发送结果
+		case <-ctx.Done():
+			// Context已取消，关闭连接（如果有）并退出，防止goroutine泄漏
+			if conn != nil {
+				conn.Close()
+			}
+		}
 	}()
 
 	select {

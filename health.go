@@ -147,9 +147,20 @@ func (h *HealthCheckManager) checkConnection(conn *Connection) {
 		defer func() {
 			// 防止panic
 			if r := recover(); r != nil {
-				done <- false
+				select {
+				case done <- false:
+				case <-ctx.Done():
+					// Context已取消，goroutine可以安全退出
+				}
 			}
 		}()
+		// 检查context是否已取消
+		select {
+		case <-ctx.Done():
+			// Context已取消，goroutine可以安全退出
+			return
+		default:
+		}
 		healthy := h.performCheck(conn.GetConn())
 		select {
 		case done <- healthy:
@@ -209,13 +220,13 @@ func (h *HealthCheckManager) performCheck(conn net.Conn) bool {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				return true
 			}
-			// EOF或其他错误，连接可能已关闭
+			// EOF错误表示连接已关闭
 			if err == io.EOF {
 				return false
 			}
-			// 对于UDP，其他错误（如连接关闭）也认为不健康
-			// 但有些系统错误可能是正常的，所以我们保守地认为健康
-			return true
+			// 对于UDP，其他错误（如连接关闭、网络错误等）应该认为不健康
+			// 只有超时错误才表示连接正常（只是没有数据）
+			return false
 		}
 		// 如果能读到数据，说明连接正常
 		return true

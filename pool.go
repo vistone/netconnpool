@@ -179,6 +179,7 @@ func (p *Pool) GetWithProtocol(ctx context.Context, protocol Protocol, timeout t
 
 	// 尝试获取指定协议的连接
 	maxAttempts := 10 // 最多尝试10次
+	protocolMismatchCount := 0 // 跟踪协议不匹配的次数
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		// 检查连接池是否已关闭
 		if p.isClosed() {
@@ -195,6 +196,13 @@ func (p *Pool) GetWithProtocol(ctx context.Context, protocol Protocol, timeout t
 			// 检查连接是否有效
 			if !p.isConnectionValid(conn) {
 				p.closeConnection(conn)
+				continue
+			}
+
+			// 检查协议是否匹配
+			if conn.GetProtocol() != protocol {
+				// 协议不匹配，归还到正确的池并继续
+				p.Put(conn)
 				continue
 			}
 
@@ -263,8 +271,17 @@ func (p *Pool) GetWithProtocol(ctx context.Context, protocol Protocol, timeout t
 				return conn, nil
 			}
 
-			// 协议不匹配，归还连接并继续尝试
+			// 协议不匹配，归还连接
+			protocolMismatchCount++
 			p.Put(conn)
+
+			// 如果连续多次不匹配，返回错误，避免无限循环
+			if protocolMismatchCount >= 3 {
+				if p.statsCollector != nil {
+					p.statsCollector.IncrementFailedGets()
+				}
+				return nil, ErrNoConnectionForProtocol
+			}
 			// 继续循环尝试
 		}
 	}
@@ -596,17 +613,34 @@ func (p *Pool) Close() error {
 		closeWaitQueue := func(q chan chan *Connection) {
 			defer func() {
 				// 恢复可能的 panic（例如关闭已关闭的 channel）
-				recover()
+				// 这是预期的行为，因为 channel 可能已经被关闭
+				if r := recover(); r != nil {
+					// 预期的 panic：关闭已关闭的 channel
+					// 不重新抛出，确保其他资源能够被清理
+					_ = r
+				}
 			}()
 			for {
 				select {
 				case waitChan := <-q:
 					// 安全关闭 waitChan
 					func() {
-						defer recover()
+						defer func() {
+							// 预期的 panic：向已关闭的 channel 发送数据或关闭已关闭的 channel
+							if r := recover(); r != nil {
+								_ = r
+							}
+						}()
 						close(waitChan)
 					}()
 				default:
+					// 尝试关闭队列 channel
+					defer func() {
+						if r := recover(); r != nil {
+							// 预期的 panic：关闭已关闭的 channel
+							_ = r
+						}
+					}()
 					close(q)
 					return
 				}
@@ -753,6 +787,13 @@ func (p *Pool) closeConnection(conn *Connection) error {
 		return nil
 	}
 
+	// 先标记连接为不健康，防止被复用
+	conn.UpdateHealth(false)
+
+	// 先关闭连接，确保连接不可用
+	err := conn.Close()
+
+	// 然后从map删除
 	p.mu.Lock()
 	_, exists := p.connections[conn.ID]
 	if exists {
@@ -760,8 +801,7 @@ func (p *Pool) closeConnection(conn *Connection) error {
 	}
 	p.mu.Unlock()
 
-	err := conn.Close()
-
+	// 更新统计信息
 	if p.statsCollector != nil && exists {
 		p.statsCollector.IncrementTotalConnectionsClosed()
 		ipVersion := conn.GetIPVersion()
@@ -821,11 +861,26 @@ func (p *Pool) waitForConnection(ctx context.Context) (*Connection, error) {
 						p.statsCollector.IncrementSuccessfulGets()
 						p.statsCollector.IncrementCurrentActiveConnections(1)
 						p.statsCollector.IncrementTotalConnectionsReused()
+						switch conn.GetIPVersion() {
+						case IPVersionIPv4:
+							p.statsCollector.IncrementCurrentIPv4IdleConnections(-1)
+						case IPVersionIPv6:
+							p.statsCollector.IncrementCurrentIPv6IdleConnections(-1)
+						}
+						switch conn.GetProtocol() {
+						case ProtocolTCP:
+							p.statsCollector.IncrementCurrentTCPIdleConnections(-1)
+						case ProtocolUDP:
+							p.statsCollector.IncrementCurrentUDPIdleConnections(-1)
+						}
 					}
 					return conn, nil
 				}
-				// 连接无效，继续等待下一个连接
+				// 连接无效，关闭它并继续等待下一个连接
 				// 注意：这里不返回错误，而是继续等待，因为可能会有其他连接归还
+				if conn != nil {
+					p.closeConnection(conn)
+				}
 				continue
 			case <-ctx.Done():
 				if p.statsCollector != nil {
@@ -859,35 +914,68 @@ func (p *Pool) waitForConnectionWithProtocol(ctx context.Context, protocol Proto
 	}
 
 	waitChan := make(chan *Connection, 1)
-	defer close(waitChan)
+	closed := false
+	defer func() {
+		if !closed {
+			close(waitChan)
+		}
+	}()
 
 	select {
 	case waitQueue <- waitChan:
-		select {
-		case conn := <-waitChan:
-			if conn != nil && conn.GetProtocol() == protocol && p.isConnectionValid(conn) {
-				conn.MarkInUse()
-				if p.config.OnBorrow != nil {
-					p.config.OnBorrow(conn.GetConn())
+		// 成功加入等待队列，等待连接
+		for {
+			select {
+			case conn := <-waitChan:
+				if conn != nil && conn.GetProtocol() == protocol && p.isConnectionValid(conn) {
+					closed = true
+					close(waitChan)
+					conn.MarkInUse()
+					conn.IncrementReuseCount()
+					if p.config.OnBorrow != nil {
+						p.config.OnBorrow(conn.GetConn())
+					}
+					if p.statsCollector != nil {
+						p.statsCollector.IncrementSuccessfulGets()
+						p.statsCollector.IncrementCurrentActiveConnections(1)
+						p.statsCollector.IncrementTotalConnectionsReused()
+						switch conn.GetProtocol() {
+						case ProtocolTCP:
+							p.statsCollector.IncrementCurrentTCPIdleConnections(-1)
+						case ProtocolUDP:
+							p.statsCollector.IncrementCurrentUDPIdleConnections(-1)
+						}
+					}
+					return conn, nil
 				}
+				// 连接无效或协议不匹配，关闭它并继续等待
+				if conn != nil {
+					p.closeConnection(conn)
+				}
+				continue
+			case <-ctx.Done():
+				closed = true
+				close(waitChan)
 				if p.statsCollector != nil {
-					p.statsCollector.IncrementSuccessfulGets()
-					p.statsCollector.IncrementCurrentActiveConnections(1)
+					p.statsCollector.IncrementTimeoutGets()
 				}
-				return conn, nil
+				return nil, ErrGetConnectionTimeout
+			case <-p.closeChan:
+				closed = true
+				close(waitChan)
+				return nil, ErrPoolClosed
 			}
-			return nil, ErrGetConnectionTimeout
-		case <-ctx.Done():
-			return nil, ErrGetConnectionTimeout
-		case <-p.closeChan:
-			return nil, ErrPoolClosed
 		}
 	case <-ctx.Done():
+		closed = true
+		close(waitChan)
 		if p.statsCollector != nil {
 			p.statsCollector.IncrementTimeoutGets()
 		}
 		return nil, ErrGetConnectionTimeout
 	case <-p.closeChan:
+		closed = true
+		close(waitChan)
 		return nil, ErrPoolClosed
 	}
 }
@@ -965,35 +1053,74 @@ func (p *Pool) waitForConnectionWithIPVersion(ctx context.Context, ipVersion IPV
 	}
 
 	waitChan := make(chan *Connection, 1)
-	defer close(waitChan)
+	closed := false
+	defer func() {
+		if !closed {
+			close(waitChan)
+		}
+	}()
 
 	select {
 	case waitQueue <- waitChan:
-		select {
-		case conn := <-waitChan:
-			if conn != nil && conn.GetIPVersion() == ipVersion && p.isConnectionValid(conn) {
-				conn.MarkInUse()
-				if p.config.OnBorrow != nil {
-					p.config.OnBorrow(conn.GetConn())
+		// 成功加入等待队列，等待连接
+		for {
+			select {
+			case conn := <-waitChan:
+				if conn != nil && conn.GetIPVersion() == ipVersion && p.isConnectionValid(conn) {
+					closed = true
+					close(waitChan)
+					conn.MarkInUse()
+					conn.IncrementReuseCount()
+					if p.config.OnBorrow != nil {
+						p.config.OnBorrow(conn.GetConn())
+					}
+					if p.statsCollector != nil {
+						p.statsCollector.IncrementSuccessfulGets()
+						p.statsCollector.IncrementCurrentActiveConnections(1)
+						p.statsCollector.IncrementTotalConnectionsReused()
+						switch conn.GetIPVersion() {
+						case IPVersionIPv4:
+							p.statsCollector.IncrementCurrentIPv4IdleConnections(-1)
+						case IPVersionIPv6:
+							p.statsCollector.IncrementCurrentIPv6IdleConnections(-1)
+						}
+						switch conn.GetProtocol() {
+						case ProtocolTCP:
+							p.statsCollector.IncrementCurrentTCPIdleConnections(-1)
+						case ProtocolUDP:
+							p.statsCollector.IncrementCurrentUDPIdleConnections(-1)
+						}
+					}
+					return conn, nil
 				}
+				// 连接无效或IP版本不匹配，关闭它并继续等待
+				if conn != nil {
+					p.closeConnection(conn)
+				}
+				continue
+			case <-ctx.Done():
+				closed = true
+				close(waitChan)
 				if p.statsCollector != nil {
-					p.statsCollector.IncrementSuccessfulGets()
-					p.statsCollector.IncrementCurrentActiveConnections(1)
+					p.statsCollector.IncrementTimeoutGets()
 				}
-				return conn, nil
+				return nil, ErrGetConnectionTimeout
+			case <-p.closeChan:
+				closed = true
+				close(waitChan)
+				return nil, ErrPoolClosed
 			}
-			return nil, ErrGetConnectionTimeout
-		case <-ctx.Done():
-			return nil, ErrGetConnectionTimeout
-		case <-p.closeChan:
-			return nil, ErrPoolClosed
 		}
 	case <-ctx.Done():
+		closed = true
+		close(waitChan)
 		if p.statsCollector != nil {
 			p.statsCollector.IncrementTimeoutGets()
 		}
 		return nil, ErrGetConnectionTimeout
 	case <-p.closeChan:
+		closed = true
+		close(waitChan)
 		return nil, ErrPoolClosed
 	}
 }
@@ -1011,9 +1138,14 @@ func (p *Pool) warmUp() error {
 	ctx, cancel := context.WithTimeout(context.Background(), p.config.ConnectionTimeout*time.Duration(p.config.MinConnections))
 	defer cancel()
 
+	successCount := 0
 	for i := 0; i < p.config.MinConnections; i++ {
 		conn, err := p.createConnection(ctx)
 		if err != nil {
+			// 预热失败，更新统计信息
+			if p.statsCollector != nil {
+				p.statsCollector.IncrementConnectionErrors()
+			}
 			continue
 		}
 
@@ -1023,9 +1155,13 @@ func (p *Pool) warmUp() error {
 			// 注意：Put 方法在失败时会调用 closeConnection，
 			// 但为了确保资源被释放，这里不需要额外操作
 			// 因为 Put 内部已经处理了关闭逻辑
+		} else {
+			successCount++
 		}
 	}
 
+	// 如果所有预热都失败，可以考虑返回错误（但为了兼容性，暂时不返回）
+	// 统计信息已经记录了错误，调用者可以通过统计信息了解预热情况
 	return nil
 }
 
