@@ -12,7 +12,7 @@
 # Go 编译产物（可执行文件，名称与目录名相同）
 udp
 ipv6
-test
+/test
 basic
 advanced
 server
