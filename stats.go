@@ -181,11 +181,24 @@ func (s *StatsCollector) IncrementLeakedConnections() {
 func (s *StatsCollector) RecordGetTime(duration time.Duration) {
 	atomic.AddInt64((*int64)(&s.stats.TotalGetTime), int64(duration))
 	// 计算平均时间
-	totalGets := atomic.LoadInt64(&s.stats.SuccessfulGets)
-	if totalGets > 0 {
-		totalTime := atomic.LoadInt64((*int64)(&s.stats.TotalGetTime))
-		avgTime := time.Duration(totalTime / totalGets)
-		atomic.StoreInt64((*int64)(&s.stats.AverageGetTime), int64(avgTime))
+	// 使用重试机制减少竞态条件的影响
+	for i := 0; i < 3; i++ {
+		totalGets := atomic.LoadInt64(&s.stats.SuccessfulGets)
+		if totalGets > 0 {
+			totalTime := atomic.LoadInt64((*int64)(&s.stats.TotalGetTime))
+			// 再次检查 totalGets，如果变化不大则使用
+			totalGets2 := atomic.LoadInt64(&s.stats.SuccessfulGets)
+			if totalGets == totalGets2 || totalGets2 == 0 {
+				if totalGets2 > 0 {
+					avgTime := time.Duration(totalTime / totalGets2)
+					atomic.StoreInt64((*int64)(&s.stats.AverageGetTime), int64(avgTime))
+				}
+				break
+			}
+			// 如果 totalGets 变化很大，重试
+		} else {
+			break
+		}
 	}
 	s.updateTime()
 }

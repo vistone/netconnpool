@@ -160,8 +160,21 @@ func (c *CleanupManager) enforceMaxIdleConnections() {
 	if c.pool.statsCollector == nil {
 		return
 	}
-	
-	idleCount := int(c.pool.statsCollector.GetStats().CurrentIdleConnections)
+
+	// 获取连接快照
+	connections := c.pool.getAllConnections()
+
+	// 统计实际空闲连接数（需要重新检查，因为状态可能已改变）
+	idleConns := make([]*Connection, 0)
+	for _, conn := range connections {
+		// 再次检查连接状态（使用线程安全方法）
+		if !conn.IsInUse() {
+			idleConns = append(idleConns, conn)
+		}
+	}
+
+	// 使用实际空闲连接数，而不是统计信息
+	idleCount := len(idleConns)
 	if idleCount <= c.config.MaxIdleConnections {
 		return
 	}
@@ -169,18 +182,7 @@ func (c *CleanupManager) enforceMaxIdleConnections() {
 	// 计算需要关闭的连接数
 	excess := idleCount - c.config.MaxIdleConnections
 
-	connections := c.pool.getAllConnections()
-	
 	// 找出空闲时间最长的连接，优先关闭
-	idleConns := make([]*Connection, 0)
-	for _, conn := range connections {
-		// 使用线程安全的方法检查连接是否在使用中
-		if !conn.IsInUse() {
-			idleConns = append(idleConns, conn)
-		}
-	}
-	
-	// 简单选择排序：找到空闲时间最长的连接
 	toClose := make([]*Connection, 0, excess)
 	for len(toClose) < excess && len(idleConns) > 0 {
 		maxIdx := 0
@@ -196,12 +198,15 @@ func (c *CleanupManager) enforceMaxIdleConnections() {
 		// 移除已选中的连接
 		idleConns = append(idleConns[:maxIdx], idleConns[maxIdx+1:]...)
 	}
-	
+
 	// 标记为不健康并关闭
 	for _, conn := range toClose {
-		conn.UpdateHealth(false)
-		// 尝试关闭连接（可能在通道中，会在下次取出时验证失败而被关闭）
-		c.pool.closeConnection(conn)
+		// 再次检查连接是否在使用中（防止在排序期间被获取）
+		if !conn.IsInUse() {
+			conn.UpdateHealth(false)
+			// 尝试关闭连接（可能在通道中，会在下次取出时验证失败而被关闭）
+			c.pool.closeConnection(conn)
+		}
 	}
 }
 

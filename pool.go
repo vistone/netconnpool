@@ -317,6 +317,7 @@ func (p *Pool) GetWithIPVersion(ctx context.Context, ipVersion IPVersion, timeou
 	}
 
 	maxAttempts := 10
+	ipVersionMismatchCount := 0 // 跟踪IP版本不匹配的次数
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if p.isClosed() {
 			return nil, ErrPoolClosed
@@ -335,6 +336,14 @@ func (p *Pool) GetWithIPVersion(ctx context.Context, ipVersion IPVersion, timeou
 			// 检查IP版本是否匹配
 			if conn.GetIPVersion() != ipVersion {
 				p.Put(conn)
+				ipVersionMismatchCount++
+				// 如果连续多次不匹配，返回错误，避免无限循环
+				if ipVersionMismatchCount >= 3 {
+					if p.statsCollector != nil {
+						p.statsCollector.IncrementFailedGets()
+					}
+					return nil, ErrNoConnectionForIPVersion
+				}
 				continue
 			}
 
@@ -389,19 +398,37 @@ func (p *Pool) GetWithIPVersion(ctx context.Context, ipVersion IPVersion, timeou
 			return nil, err
 		}
 
-		if conn != nil {
-			if conn.GetIPVersion() == ipVersion {
-				conn.MarkInUse()
-				if p.config.OnBorrow != nil {
-					p.config.OnBorrow(conn.GetConn())
-				}
-				if p.statsCollector != nil {
-					p.statsCollector.IncrementSuccessfulGets()
-					p.statsCollector.IncrementCurrentActiveConnections(1)
-				}
-				return conn, nil
+		if conn == nil {
+			// 不应该发生，但添加保护防止无限循环
+			if p.statsCollector != nil {
+				p.statsCollector.IncrementFailedGets()
+				p.statsCollector.IncrementConnectionErrors()
 			}
-			p.Put(conn)
+			return nil, ErrInvalidConnection
+		}
+
+		if conn.GetIPVersion() == ipVersion {
+			conn.MarkInUse()
+			if p.config.OnBorrow != nil {
+				p.config.OnBorrow(conn.GetConn())
+			}
+			if p.statsCollector != nil {
+				p.statsCollector.IncrementSuccessfulGets()
+				p.statsCollector.IncrementCurrentActiveConnections(1)
+			}
+			return conn, nil
+		}
+
+		// IP版本不匹配，归还连接
+		ipVersionMismatchCount++
+		p.Put(conn)
+
+		// 如果连续多次不匹配，返回错误，避免无限循环
+		if ipVersionMismatchCount >= 3 {
+			if p.statsCollector != nil {
+				p.statsCollector.IncrementFailedGets()
+			}
+			return nil, ErrNoConnectionForIPVersion
 		}
 	}
 
@@ -498,17 +525,24 @@ func (p *Pool) GetWithTimeout(ctx context.Context, timeout time.Duration) (*Conn
 			return nil, err
 		}
 
-		if conn != nil {
-			conn.MarkInUse()
-			if p.config.OnBorrow != nil {
-				p.config.OnBorrow(conn.GetConn())
-			}
+		if conn == nil {
+			// 不应该发生，但添加保护防止无限循环
 			if p.statsCollector != nil {
-				p.statsCollector.IncrementSuccessfulGets()
-				p.statsCollector.IncrementCurrentActiveConnections(1)
+				p.statsCollector.IncrementFailedGets()
+				p.statsCollector.IncrementConnectionErrors()
 			}
-			return conn, nil
+			return nil, ErrInvalidConnection
 		}
+
+		conn.MarkInUse()
+		if p.config.OnBorrow != nil {
+			p.config.OnBorrow(conn.GetConn())
+		}
+		if p.statsCollector != nil {
+			p.statsCollector.IncrementSuccessfulGets()
+			p.statsCollector.IncrementCurrentActiveConnections(1)
+		}
+		return conn, nil
 	}
 }
 
@@ -635,13 +669,15 @@ func (p *Pool) Close() error {
 					}()
 				default:
 					// 尝试关闭队列 channel
-					defer func() {
-						if r := recover(); r != nil {
-							// 预期的 panic：关闭已关闭的 channel
-							_ = r
-						}
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								// 预期的 panic：关闭已关闭的 channel
+								_ = r
+							}
+						}()
+						close(q)
 					}()
-					close(q)
 					return
 				}
 			}
@@ -843,7 +879,12 @@ func (p *Pool) isConnectionValid(conn *Connection) bool {
 // waitForConnection 等待可用连接
 func (p *Pool) waitForConnection(ctx context.Context) (*Connection, error) {
 	waitChan := make(chan *Connection, 1)
-	defer close(waitChan)
+	closed := false
+	defer func() {
+		if !closed {
+			close(waitChan)
+		}
+	}()
 
 	select {
 	case p.waitQueue <- waitChan:
@@ -852,6 +893,8 @@ func (p *Pool) waitForConnection(ctx context.Context) (*Connection, error) {
 			select {
 			case conn := <-waitChan:
 				if conn != nil && p.isConnectionValid(conn) {
+					closed = true
+					close(waitChan)
 					conn.MarkInUse()
 					conn.IncrementReuseCount()
 					if p.config.OnBorrow != nil {
@@ -883,20 +926,28 @@ func (p *Pool) waitForConnection(ctx context.Context) (*Connection, error) {
 				}
 				continue
 			case <-ctx.Done():
+				closed = true
+				close(waitChan)
 				if p.statsCollector != nil {
 					p.statsCollector.IncrementTimeoutGets()
 				}
 				return nil, ErrGetConnectionTimeout
 			case <-p.closeChan:
+				closed = true
+				close(waitChan)
 				return nil, ErrPoolClosed
 			}
 		}
 	case <-ctx.Done():
+		closed = true
+		close(waitChan)
 		if p.statsCollector != nil {
 			p.statsCollector.IncrementTimeoutGets()
 		}
 		return nil, ErrGetConnectionTimeout
 	case <-p.closeChan:
+		closed = true
+		close(waitChan)
 		return nil, ErrPoolClosed
 	}
 }
@@ -1135,7 +1186,13 @@ func (p *Pool) warmUp() error {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), p.config.ConnectionTimeout*time.Duration(p.config.MinConnections))
+	// 防止超时时间溢出，设置最大超时时间为10分钟
+	maxTimeout := 10 * time.Minute
+	timeout := p.config.ConnectionTimeout * time.Duration(p.config.MinConnections)
+	if timeout > maxTimeout {
+		timeout = maxTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	successCount := 0
