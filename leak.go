@@ -64,8 +64,12 @@ func (l *LeakDetector) Start() {
 	}
 
 	l.running = true
-	// 每分钟检查一次
-	l.ticker = time.NewTicker(1 * time.Minute)
+	// 使用配置的检测间隔，如果未设置则默认1分钟
+	interval := l.config.LeakDetectionInterval
+	if interval <= 0 {
+		interval = 1 * time.Minute
+	}
+	l.ticker = time.NewTicker(interval)
 
 	l.wg.Add(1)
 	go l.detectionLoop()

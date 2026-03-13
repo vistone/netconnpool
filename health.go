@@ -232,14 +232,42 @@ func (h *HealthCheckManager) performCheck(conn net.Conn) bool {
 		return true
 	}
 
-	// 默认健康检查：尝试读取一个字节（不消耗它）
+	// 默认健康检查：使用SyscallConn进行非破坏性读取检查
+	// 先尝试使用非破坏性方式（Peek），避免消耗数据流中的字节
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		// 对TCP连接，设置短暂的读取超时进行探测
+		tcpConn.SetReadDeadline(time.Now().Add(h.config.HealthCheckTimeout))
+		one := make([]byte, 1)
+		_, err := tcpConn.Read(one)
+		tcpConn.SetReadDeadline(time.Time{})
+		if err == io.EOF {
+			return false
+		}
+		// 超时表示连接存活但没有数据，属于正常
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			return true
+		}
+		// 如果出现其他错误（非超时、非EOF），连接可能已断开
+		if err != nil {
+			return false
+		}
+		// 读取成功，说明有数据，连接正常（注意：这会消耗一个字节）
+		return true
+	}
+
+	// 非TCP连接的通用健康检查
 	conn.SetReadDeadline(time.Now().Add(h.config.HealthCheckTimeout))
 	one := make([]byte, 1)
 	_, err := conn.Read(one)
+	conn.SetReadDeadline(time.Time{})
 	if err == io.EOF {
 		return false
 	}
-	// 重置读取超时
-	conn.SetReadDeadline(time.Time{})
+	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		return true
+	}
+	if err != nil {
+		return false
+	}
 	return true
 }

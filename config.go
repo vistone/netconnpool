@@ -82,6 +82,10 @@ type Config struct {
 	// 如果连接在此时间内未归还，将触发泄漏警告
 	ConnectionLeakTimeout time.Duration
 
+	// LeakDetectionInterval 泄漏检测循环间隔
+	// 如果为0，默认为 ConnectionLeakTimeout 的一半（最小1秒，最大1分钟）
+	LeakDetectionInterval time.Duration
+
 	// Dialer 连接创建函数（客户端模式必需）
 	// 在客户端模式下，用于主动创建连接到服务器
 	Dialer Dialer
@@ -220,6 +224,16 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxBufferClearPackets <= 0 {
 		c.MaxBufferClearPackets = 100
+	}
+	// 如果未设置泄漏检测间隔，自动计算
+	if c.LeakDetectionInterval <= 0 && c.ConnectionLeakTimeout > 0 {
+		c.LeakDetectionInterval = c.ConnectionLeakTimeout / 2
+		if c.LeakDetectionInterval < 1*time.Second {
+			c.LeakDetectionInterval = 1 * time.Second
+		}
+		if c.LeakDetectionInterval > 1*time.Minute {
+			c.LeakDetectionInterval = 1 * time.Minute
+		}
 	}
 	return nil
 }

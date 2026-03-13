@@ -298,6 +298,7 @@ func TestPool_ConnectionLeakDetection(t *testing.T) {
 	config := netconnpool.DefaultConfig()
 	config.MaxConnections = 10
 	config.ConnectionLeakTimeout = 100 * time.Millisecond
+	config.LeakDetectionInterval = 200 * time.Millisecond
 	config.ConnectionTimeout = 1 * time.Second
 
 	config.Dialer = func(ctx context.Context) (net.Conn, error) {
@@ -316,12 +317,15 @@ func TestPool_ConnectionLeakDetection(t *testing.T) {
 		t.Fatalf("获取连接失败: %v", err)
 	}
 
-	// 等待泄漏检测（泄漏检测每分钟执行一次）
-	time.Sleep(70 * time.Second)
+	// 等待泄漏检测（检测间隔为200ms，泄漏超时为100ms）
+	time.Sleep(500 * time.Millisecond)
 
 	stats := pool.Stats()
-	// 注意：泄漏检测可能还没有执行，所以这个测试可能不稳定
-	// 但至少验证了连接没有被自动关闭
+	// 验证泄漏被检测到
+	if stats.LeakedConnections == 0 {
+		t.Error("应该检测到泄漏的连接")
+	}
+	// 泄漏的连接应该还在连接池中（不自动关闭）
 	if stats.CurrentConnections == 0 {
 		t.Error("泄漏的连接应该还在连接池中")
 	}

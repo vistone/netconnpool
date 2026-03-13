@@ -38,6 +38,7 @@ debug.log
 # 临时文件
 *.tmp
 *.temp
+*.bak
 
 # 调试日志文件
 .cursor/
