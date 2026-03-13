@@ -192,6 +192,9 @@ func (c *Connection) Close() error {
 	var err error
 	if c.onClose != nil {
 		err = c.onClose()
+	} else {
+		// 确保即使 onClose 为 nil，底层连接也被关闭
+		err = c.Conn.Close()
 	}
 	c.Conn = nil
 	return err

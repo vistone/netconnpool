@@ -298,6 +298,7 @@ func TestPool_ConnectionLeakDetection(t *testing.T) {
 	config := netconnpool.DefaultConfig()
 	config.MaxConnections = 10
 	config.ConnectionLeakTimeout = 100 * time.Millisecond
+	config.LeakDetectionInterval = 200 * time.Millisecond
 	config.ConnectionTimeout = 1 * time.Second
 
 	config.Dialer = func(ctx context.Context) (net.Conn, error) {
@@ -316,12 +317,15 @@ func TestPool_ConnectionLeakDetection(t *testing.T) {
 		t.Fatalf("获取连接失败: %v", err)
 	}
 
-	// 等待泄漏检测（泄漏检测每分钟执行一次）
-	time.Sleep(70 * time.Second)
+	// 等待泄漏检测（检测间隔为200ms，泄漏超时为100ms）
+	time.Sleep(500 * time.Millisecond)
 
 	stats := pool.Stats()
-	// 注意：泄漏检测可能还没有执行，所以这个测试可能不稳定
-	// 但至少验证了连接没有被自动关闭
+	// 验证泄漏被检测到
+	if stats.LeakedConnections == 0 {
+		t.Error("应该检测到泄漏的连接")
+	}
+	// 泄漏的连接应该还在连接池中（不自动关闭）
 	if stats.CurrentConnections == 0 {
 		t.Error("泄漏的连接应该还在连接池中")
 	}
@@ -443,4 +447,116 @@ func TestPool_StatsAccuracy(t *testing.T) {
 	if stats.TotalConnectionsReused == 0 && stats.SuccessfulGets > 1 {
 		t.Error("应该有连接复用")
 	}
+}
+
+// TestPool_LeakDetectionInterval 测试泄漏检测间隔配置
+func TestPool_LeakDetectionInterval(t *testing.T) {
+	config := netconnpool.DefaultConfig()
+	config.MaxConnections = 10
+	config.ConnectionLeakTimeout = 50 * time.Millisecond
+	config.LeakDetectionInterval = 100 * time.Millisecond
+	config.ConnectionTimeout = 1 * time.Second
+
+	config.Dialer = func(ctx context.Context) (net.Conn, error) {
+		return &mockConn{}, nil
+	}
+
+	pool, err := netconnpool.NewPool(config)
+	if err != nil {
+		t.Fatalf("创建连接池失败: %v", err)
+	}
+	defer pool.Close()
+
+	// 获取连接不归还
+	conn, err := pool.Get(context.Background())
+	if err != nil {
+		t.Fatalf("获取连接失败: %v", err)
+	}
+
+	// 等待泄漏检测执行（间隔100ms + 一些余量）
+	time.Sleep(300 * time.Millisecond)
+
+	stats := pool.Stats()
+	if stats.LeakedConnections == 0 {
+		t.Error("应该检测到泄漏的连接")
+	}
+
+	conn.Close()
+}
+
+// TestPool_LeakDetectionIntervalAutoDerive 测试泄漏检测间隔自动推导
+func TestPool_LeakDetectionIntervalAutoDerive(t *testing.T) {
+	config := netconnpool.DefaultConfig()
+	config.MaxConnections = 10
+	config.ConnectionLeakTimeout = 4 * time.Second
+	// 不设置 LeakDetectionInterval，应该自动推导为 2s
+	config.ConnectionTimeout = 1 * time.Second
+
+	config.Dialer = func(ctx context.Context) (net.Conn, error) {
+		return &mockConn{}, nil
+	}
+
+	// Validate 会自动设置 LeakDetectionInterval
+	err := config.Validate()
+	if err != nil {
+		t.Fatalf("验证配置失败: %v", err)
+	}
+
+	expected := 2 * time.Second
+	if config.LeakDetectionInterval != expected {
+		t.Errorf("LeakDetectionInterval 应该为 %v，但实际为 %v", expected, config.LeakDetectionInterval)
+	}
+}
+
+// TestPool_ConnectionCloseWithNilOnClose 测试 onClose 为 nil 时连接是否正确关闭
+func TestPool_ConnectionCloseWithNilOnClose(t *testing.T) {
+	mc := &mockConn{}
+	conn := netconnpool.NewConnection(mc, nil, nil)
+
+	err := conn.Close()
+	if err != nil {
+		t.Errorf("关闭连接失败: %v", err)
+	}
+
+	if !mc.IsClosed() {
+		t.Error("底层连接应该已被关闭")
+	}
+}
+
+// TestPool_HealthCheckDoesNotBreakIdleConnections 测试健康检查不会破坏空闲连接
+func TestPool_HealthCheckDoesNotBreakIdleConnections(t *testing.T) {
+	config := netconnpool.DefaultConfig()
+	config.MaxConnections = 10
+	config.EnableHealthCheck = true
+	config.HealthCheckInterval = 50 * time.Millisecond
+	config.HealthCheckTimeout = 30 * time.Millisecond
+	config.ConnectionTimeout = 1 * time.Second
+	config.GetConnectionTimeout = 1 * time.Second
+
+	config.Dialer = func(ctx context.Context) (net.Conn, error) {
+		return &mockConn{}, nil
+	}
+
+	pool, err := netconnpool.NewPool(config)
+	if err != nil {
+		t.Fatalf("创建连接池失败: %v", err)
+	}
+	defer pool.Close()
+
+	// 获取并归还连接
+	conn, err := pool.Get(context.Background())
+	if err != nil {
+		t.Fatalf("获取连接失败: %v", err)
+	}
+	pool.Put(conn)
+
+	// 等待多次健康检查
+	time.Sleep(200 * time.Millisecond)
+
+	// 连接应该仍然可用（健康检查不应破坏它）
+	conn2, err := pool.Get(context.Background())
+	if err != nil {
+		t.Fatalf("健康检查后获取连接失败: %v", err)
+	}
+	pool.Put(conn2)
 }
