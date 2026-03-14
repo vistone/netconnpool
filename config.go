@@ -246,9 +246,13 @@ func defaultAcceptor(ctx context.Context, listener net.Listener) (net.Conn, erro
 		err  error
 	}
 	resultChan := make(chan result, 1)
+	// 用于通知goroutine退出的channel
+	doneChan := make(chan struct{})
 
 	go func() {
+		defer close(doneChan)
 		conn, err := listener.Accept()
+		// 使用非阻塞发送，确保goroutine不会卡住
 		select {
 		case resultChan <- result{conn: conn, err: err}:
 			// 成功发送结果
@@ -264,6 +268,13 @@ func defaultAcceptor(ctx context.Context, listener net.Listener) (net.Conn, erro
 	case res := <-resultChan:
 		return res.conn, res.err
 	case <-ctx.Done():
+		// 等待goroutine退出或超时，防止goroutine泄漏
+		select {
+		case <-doneChan:
+			// goroutine已退出
+		case <-time.After(100 * time.Millisecond):
+			// 超时，继续返回
+		}
 		return nil, ctx.Err()
 	}
 }

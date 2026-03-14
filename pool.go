@@ -178,8 +178,10 @@ func (p *Pool) GetWithProtocol(ctx context.Context, protocol Protocol, timeout t
 	}
 
 	// 尝试获取指定协议的连接
-	maxAttempts := 10 // 最多尝试10次
+	maxAttempts := 10          // 最多尝试10次
 	protocolMismatchCount := 0 // 跟踪协议不匹配的次数
+	createFailedCount := 0     // 跟踪创建连接失败的次数
+
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		// 检查连接池是否已关闭
 		if p.isClosed() {
@@ -246,44 +248,61 @@ func (p *Pool) GetWithProtocol(ctx context.Context, protocol Protocol, timeout t
 		// 创建新连接
 		conn, err := p.createConnection(ctx)
 		if err != nil {
-			if p.statsCollector != nil {
-				p.statsCollector.IncrementFailedGets()
-				p.statsCollector.IncrementConnectionErrors()
-			}
-			return nil, err
-		}
-
-		if conn != nil {
-			// 检查协议是否匹配（理论上createConnection应该返回正确的协议，但为了安全）
-			if conn.GetProtocol() == protocol {
-				conn.MarkInUse()
-
-				// 调用借出钩子
-				if p.config.OnBorrow != nil {
-					p.config.OnBorrow(conn.GetConn())
-				}
-
-				if p.statsCollector != nil {
-					p.statsCollector.IncrementSuccessfulGets()
-					p.statsCollector.IncrementCurrentActiveConnections(1)
-				}
-
-				return conn, nil
-			}
-
-			// 协议不匹配，归还连接
-			protocolMismatchCount++
-			p.Put(conn)
-
-			// 如果连续多次不匹配，返回错误，避免无限循环
-			if protocolMismatchCount >= 3 {
+			createFailedCount++
+			// 如果创建连接多次失败，返回错误避免无限循环
+			if createFailedCount >= 3 {
 				if p.statsCollector != nil {
 					p.statsCollector.IncrementFailedGets()
+					p.statsCollector.IncrementConnectionErrors()
 				}
-				return nil, ErrNoConnectionForProtocol
+				return nil, err
 			}
-			// 继续循环尝试
+			// 短暂延迟后重试
+			select {
+			case <-time.After(10 * time.Millisecond):
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		}
+
+		// 创建连接成功但返回nil（不应该发生），添加保护
+		if conn == nil {
+			if p.statsCollector != nil {
+				p.statsCollector.IncrementFailedGets()
+			}
+			return nil, ErrInvalidConnection
+		}
+
+		// 检查协议是否匹配（理论上createConnection应该返回正确的协议，但为了安全）
+		if conn.GetProtocol() == protocol {
+			conn.MarkInUse()
+
+			// 调用借出钩子
+			if p.config.OnBorrow != nil {
+				p.config.OnBorrow(conn.GetConn())
+			}
+
+			if p.statsCollector != nil {
+				p.statsCollector.IncrementSuccessfulGets()
+				p.statsCollector.IncrementCurrentActiveConnections(1)
+			}
+
+			return conn, nil
+		}
+
+		// 协议不匹配，归还连接
+		protocolMismatchCount++
+		p.Put(conn)
+
+		// 如果连续多次不匹配，返回错误，避免无限循环
+		if protocolMismatchCount >= 3 {
+			if p.statsCollector != nil {
+				p.statsCollector.IncrementFailedGets()
+			}
+			return nil, ErrNoConnectionForProtocol
+		}
+		// 继续循环尝试
 	}
 
 	if p.statsCollector != nil {
@@ -826,16 +845,17 @@ func (p *Pool) closeConnection(conn *Connection) error {
 	// 先标记连接为不健康，防止被复用
 	conn.UpdateHealth(false)
 
-	// 先关闭连接，确保连接不可用
-	err := conn.Close()
-
-	// 然后从map删除
+	// 从map删除 - 在关闭连接之前删除，避免竞态条件
 	p.mu.Lock()
 	_, exists := p.connections[conn.ID]
 	if exists {
 		delete(p.connections, conn.ID)
 	}
 	p.mu.Unlock()
+
+	// 然后关闭连接，确保连接不可用
+	// 注意：在删除map后再关闭连接，避免其他goroutine在关闭期间获取到该连接
+	err := conn.Close()
 
 	// 更新统计信息
 	if p.statsCollector != nil && exists {
@@ -879,12 +899,7 @@ func (p *Pool) isConnectionValid(conn *Connection) bool {
 // waitForConnection 等待可用连接
 func (p *Pool) waitForConnection(ctx context.Context) (*Connection, error) {
 	waitChan := make(chan *Connection, 1)
-	closed := false
-	defer func() {
-		if !closed {
-			close(waitChan)
-		}
-	}()
+	defer close(waitChan)
 
 	select {
 	case p.waitQueue <- waitChan:
@@ -893,8 +908,6 @@ func (p *Pool) waitForConnection(ctx context.Context) (*Connection, error) {
 			select {
 			case conn := <-waitChan:
 				if conn != nil && p.isConnectionValid(conn) {
-					closed = true
-					close(waitChan)
 					conn.MarkInUse()
 					conn.IncrementReuseCount()
 					if p.config.OnBorrow != nil {
@@ -926,28 +939,30 @@ func (p *Pool) waitForConnection(ctx context.Context) (*Connection, error) {
 				}
 				continue
 			case <-ctx.Done():
-				closed = true
-				close(waitChan)
+				// 检查waitChan中是否有数据，避免通知者阻塞
+				select {
+				case <-waitChan:
+				default:
+				}
 				if p.statsCollector != nil {
 					p.statsCollector.IncrementTimeoutGets()
 				}
 				return nil, ErrGetConnectionTimeout
 			case <-p.closeChan:
-				closed = true
-				close(waitChan)
+				// 检查waitChan中是否有数据，避免通知者阻塞
+				select {
+				case <-waitChan:
+				default:
+				}
 				return nil, ErrPoolClosed
 			}
 		}
 	case <-ctx.Done():
-		closed = true
-		close(waitChan)
 		if p.statsCollector != nil {
 			p.statsCollector.IncrementTimeoutGets()
 		}
 		return nil, ErrGetConnectionTimeout
 	case <-p.closeChan:
-		closed = true
-		close(waitChan)
 		return nil, ErrPoolClosed
 	}
 }
@@ -965,12 +980,7 @@ func (p *Pool) waitForConnectionWithProtocol(ctx context.Context, protocol Proto
 	}
 
 	waitChan := make(chan *Connection, 1)
-	closed := false
-	defer func() {
-		if !closed {
-			close(waitChan)
-		}
-	}()
+	defer close(waitChan)
 
 	select {
 	case waitQueue <- waitChan:
@@ -979,8 +989,6 @@ func (p *Pool) waitForConnectionWithProtocol(ctx context.Context, protocol Proto
 			select {
 			case conn := <-waitChan:
 				if conn != nil && conn.GetProtocol() == protocol && p.isConnectionValid(conn) {
-					closed = true
-					close(waitChan)
 					conn.MarkInUse()
 					conn.IncrementReuseCount()
 					if p.config.OnBorrow != nil {
@@ -1005,28 +1013,30 @@ func (p *Pool) waitForConnectionWithProtocol(ctx context.Context, protocol Proto
 				}
 				continue
 			case <-ctx.Done():
-				closed = true
-				close(waitChan)
+				// 检查waitChan中是否有数据，避免通知者阻塞
+				select {
+				case <-waitChan:
+				default:
+				}
 				if p.statsCollector != nil {
 					p.statsCollector.IncrementTimeoutGets()
 				}
 				return nil, ErrGetConnectionTimeout
 			case <-p.closeChan:
-				closed = true
-				close(waitChan)
+				// 检查waitChan中是否有数据，避免通知者阻塞
+				select {
+				case <-waitChan:
+				default:
+				}
 				return nil, ErrPoolClosed
 			}
 		}
 	case <-ctx.Done():
-		closed = true
-		close(waitChan)
 		if p.statsCollector != nil {
 			p.statsCollector.IncrementTimeoutGets()
 		}
 		return nil, ErrGetConnectionTimeout
 	case <-p.closeChan:
-		closed = true
-		close(waitChan)
 		return nil, ErrPoolClosed
 	}
 }

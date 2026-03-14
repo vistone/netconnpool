@@ -142,8 +142,12 @@ func (h *HealthCheckManager) checkConnection(conn *Connection) {
 	defer cancel()
 
 	done := make(chan bool, 1)
+	// 用于通知goroutine退出的channel
+	exitChan := make(chan struct{})
+
 	// 使用带缓冲的channel，确保goroutine不会永远阻塞
 	go func() {
+		defer close(exitChan) // 确保goroutine退出时通知主线程
 		defer func() {
 			// 防止panic
 			if r := recover(); r != nil {
@@ -179,6 +183,12 @@ func (h *HealthCheckManager) checkConnection(conn *Connection) {
 				h.pool.statsCollector.IncrementUnhealthyConnections()
 			}
 		}
+		// 等待goroutine退出
+		select {
+		case <-exitChan:
+		case <-time.After(100 * time.Millisecond):
+			// 超时，继续
+		}
 	case <-ctx.Done():
 		// 健康检查超时，标记为不健康
 		conn.UpdateHealth(false)
@@ -188,7 +198,7 @@ func (h *HealthCheckManager) checkConnection(conn *Connection) {
 		}
 		// 等待goroutine退出或超时
 		select {
-		case <-done:
+		case <-exitChan:
 		case <-time.After(100 * time.Millisecond):
 			// 给goroutine一点时间退出
 		}
