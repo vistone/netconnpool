@@ -1,5 +1,7 @@
 # 项目结构说明
 
+[English](STRUCTURE_en.md) | 中文
+
 ```
 netconnpool/
 ├── .gemini/                      # 代码审核和优化文档

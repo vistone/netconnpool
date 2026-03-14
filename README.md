@@ -4,6 +4,8 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/vistone/netconnpool)](https://goreportcard.com/report/github.com/vistone/netconnpool)
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 
+[English](README_en.md) | 中文
+
 一个功能全面、高性能的 Go 语言网络连接池管理库，提供了完善的连接生命周期管理、健康检查、统计监控等功能。
 
 **核心特性**：

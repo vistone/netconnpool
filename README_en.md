@@ -4,6 +4,8 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/vistone/netconnpool)](https://goreportcard.com/report/github.com/vistone/netconnpool)
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 
+English | [中文](README.md)
+
 A comprehensive, high-performance Go network connection pool management library with complete connection lifecycle management, health checks, and statistical monitoring.
 
 **Core Features**:

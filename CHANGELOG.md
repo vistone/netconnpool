@@ -1,5 +1,7 @@
 # Changelog
 
+English | [中文](../CHANGELOG_zh.md)
+
 ## [1.0.4] - 2026-03-14
 
 ### Fixed
