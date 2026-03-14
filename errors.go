@@ -30,44 +30,44 @@ package netconnpool
 
 import "errors"
 
-// 连接池相关错误定义
+// Connection pool related error definitions
 var (
-	// ErrPoolClosed 连接池已关闭
-	ErrPoolClosed = errors.New("连接池已关闭")
+	// ErrPoolClosed pool is closed
+	ErrPoolClosed = errors.New("pool is closed")
 
-	// ErrConnectionClosed 连接已关闭
-	ErrConnectionClosed = errors.New("连接已关闭")
+	// ErrConnectionClosed connection is closed
+	ErrConnectionClosed = errors.New("connection is closed")
 
-	// ErrGetConnectionTimeout 获取连接超时
-	ErrGetConnectionTimeout = errors.New("获取连接超时")
+	// ErrGetConnectionTimeout get connection timeout
+	ErrGetConnectionTimeout = errors.New("get connection timeout")
 
-	// ErrMaxConnectionsReached 已达到最大连接数
-	ErrMaxConnectionsReached = errors.New("已达到最大连接数限制")
+	// ErrMaxConnectionsReached max connections reached
+	ErrMaxConnectionsReached = errors.New("max connections limit reached")
 
-	// ErrInvalidConnection 无效连接
-	ErrInvalidConnection = errors.New("无效连接")
+	// ErrInvalidConnection invalid connection
+	ErrInvalidConnection = errors.New("invalid connection")
 
-	// ErrConnectionUnhealthy 连接不健康
-	ErrConnectionUnhealthy = errors.New("连接不健康")
+	// ErrConnectionUnhealthy connection unhealthy
+	ErrConnectionUnhealthy = errors.New("connection unhealthy")
 
-	// ErrInvalidConfig 配置无效
-	ErrInvalidConfig = errors.New("配置参数无效")
+	// ErrInvalidConfig invalid config
+	ErrInvalidConfig = errors.New("invalid config parameters")
 
-	// ErrConnectionLeaked 连接泄漏
-	ErrConnectionLeaked = errors.New("连接泄漏检测：连接未在超时时间内归还")
+	// ErrConnectionLeaked connection leak detected
+	ErrConnectionLeaked = errors.New("connection leak detected: connection not returned within timeout")
 
-	// ErrPoolExhausted 连接池耗尽
-	ErrPoolExhausted = errors.New("连接池已耗尽，无法创建新连接")
+	// ErrPoolExhausted pool exhausted
+	ErrPoolExhausted = errors.New("pool exhausted, cannot create new connection")
 
-	// ErrUnsupportedIPVersion 不支持的IP版本
-	ErrUnsupportedIPVersion = errors.New("不支持的IP版本")
+	// ErrUnsupportedIPVersion unsupported IP version
+	ErrUnsupportedIPVersion = errors.New("unsupported IP version")
 
-	// ErrNoConnectionForIPVersion 指定IP版本没有可用连接
-	ErrNoConnectionForIPVersion = errors.New("指定IP版本没有可用连接")
-	
-	// ErrUnsupportedProtocol 不支持的协议
-	ErrUnsupportedProtocol = errors.New("不支持的协议类型")
-	
-	// ErrNoConnectionForProtocol 指定协议没有可用连接
-	ErrNoConnectionForProtocol = errors.New("指定协议没有可用连接")
+	// ErrNoConnectionForIPVersion no available connection for specified IP version
+	ErrNoConnectionForIPVersion = errors.New("no available connection for specified IP version")
+
+	// ErrUnsupportedProtocol unsupported protocol
+	ErrUnsupportedProtocol = errors.New("unsupported protocol type")
+
+	// ErrNoConnectionForProtocol no available connection for specified protocol
+	ErrNoConnectionForProtocol = errors.New("no available connection for specified protocol")
 )

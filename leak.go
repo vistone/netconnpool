@@ -33,7 +33,7 @@ import (
 	"time"
 )
 
-// LeakDetector 连接泄漏检测器
+// LeakDetector connection leak detector
 type LeakDetector struct {
 	pool     *Pool
 	config   *Config
@@ -44,7 +44,7 @@ type LeakDetector struct {
 	running  bool
 }
 
-// NewLeakDetector 创建泄漏检测器
+// NewLeakDetector creates leak detector
 func NewLeakDetector(pool *Pool, config *Config) *LeakDetector {
 	return &LeakDetector{
 		pool:     pool,
@@ -54,7 +54,7 @@ func NewLeakDetector(pool *Pool, config *Config) *LeakDetector {
 	}
 }
 
-// Start 启动泄漏检测
+// Start starts leak detection
 func (l *LeakDetector) Start() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -64,7 +64,7 @@ func (l *LeakDetector) Start() {
 	}
 
 	l.running = true
-	// 使用配置的检测间隔，如果未设置则默认1分钟
+	// Use configured detection interval, if not set default to 1 minute
 	interval := l.config.LeakDetectionInterval
 	if interval <= 0 {
 		interval = 1 * time.Minute
@@ -75,7 +75,7 @@ func (l *LeakDetector) Start() {
 	go l.detectionLoop()
 }
 
-// Stop 停止泄漏检测
+// Stop stops leak detection
 func (l *LeakDetector) Stop() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -92,7 +92,7 @@ func (l *LeakDetector) Stop() {
 	l.wg.Wait()
 }
 
-// detectionLoop 检测循环
+// detectionLoop detection loop
 func (l *LeakDetector) detectionLoop() {
 	defer l.wg.Done()
 
@@ -106,17 +106,17 @@ func (l *LeakDetector) detectionLoop() {
 	}
 }
 
-// detectLeaks 检测泄漏
+// detectLeaks detects leaks
 func (l *LeakDetector) detectLeaks() {
 	connections := l.pool.getAllConnections()
 
 	for _, conn := range connections {
-		// 使用线程安全的方法检查连接是否在使用中
+		// Use thread-safe method to check if connection is in use
 		if !conn.IsInUse() {
 			continue
 		}
 
-		// 检查是否泄漏
+		// Check if leaked
 		if conn.IsLeaked(l.config.ConnectionLeakTimeout) {
 			conn.mu.Lock()
 			conn.LeakDetected = true
@@ -126,9 +126,9 @@ func (l *LeakDetector) detectLeaks() {
 				l.pool.statsCollector.IncrementLeakedConnections()
 			}
 
-			// 注意：这里只记录泄漏，不自动关闭连接
-			// 因为连接可能正在被正常使用，只是时间较长
-			// 实际应用中可以考虑记录日志或触发告警
+			// Note: Only record leak here, do not automatically close connection
+			// Because connection may be in normal use, just for a longer time
+			// In actual applications, consider logging or triggering alerts
 		}
 	}
 }

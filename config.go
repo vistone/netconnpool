@@ -34,112 +34,112 @@ import (
 	"time"
 )
 
-// Dialer 连接创建函数类型（客户端模式）
-// 返回网络连接和错误
+// Dialer connection creation function type (client mode)
+// Returns network connection and error
 type Dialer func(ctx context.Context) (net.Conn, error)
 
-// Acceptor 连接接受函数类型（服务器端模式）
-// 从Listener接受新连接，返回网络连接和错误
+// Acceptor connection accept function type (server mode)
+// Accepts new connections from Listener, returns network connection and error
 type Acceptor func(ctx context.Context, listener net.Listener) (net.Conn, error)
 
-// HealthChecker 健康检查函数类型
-// 返回连接是否健康
+// HealthChecker health check function type
+// Returns whether connection is healthy
 type HealthChecker func(conn net.Conn) bool
 
-// Config 连接池配置
+// Config connection pool configuration
 type Config struct {
-	// Mode 连接池模式：客户端或服务器端
-	// 默认值为PoolModeClient（客户端模式）
+	// Mode connection pool mode: client or server
+	// Default value is PoolModeClient (client mode)
 	Mode PoolMode
-	// MaxConnections 最大连接数，0表示无限制
+	// MaxConnections max connection count, 0 means unlimited
 	MaxConnections int
 
-	// MinConnections 最小连接数（预热连接数）
+	// MinConnections min connection count (warm-up connection count)
 	MinConnections int
 
-	// MaxIdleConnections 最大空闲连接数
+	// MaxIdleConnections max idle connection count
 	MaxIdleConnections int
 
-	// ConnectionTimeout 连接创建超时时间
+	// ConnectionTimeout connection creation timeout
 	ConnectionTimeout time.Duration
 
-	// IdleTimeout 空闲连接超时时间，超过此时间的空闲连接将被关闭
+	// IdleTimeout idle connection timeout, idle connections exceeding this time will be closed
 	IdleTimeout time.Duration
 
-	// MaxLifetime 连接最大生命周期，超过此时间的连接将被关闭
+	// MaxLifetime connection max lifetime, connections exceeding this time will be closed
 	MaxLifetime time.Duration
 
-	// GetConnectionTimeout 获取连接的超时时间
+	// GetConnectionTimeout get connection timeout
 	GetConnectionTimeout time.Duration
 
-	// HealthCheckInterval 健康检查间隔
+	// HealthCheckInterval health check interval
 	HealthCheckInterval time.Duration
 
-	// HealthCheckTimeout 健康检查超时时间
+	// HealthCheckTimeout health check timeout
 	HealthCheckTimeout time.Duration
 
-	// ConnectionLeakTimeout 连接泄漏检测超时时间
-	// 如果连接在此时间内未归还，将触发泄漏警告
+	// ConnectionLeakTimeout connection leak detection timeout
+	// If connection is not returned within this time, leak warning will be triggered
 	ConnectionLeakTimeout time.Duration
 
-	// LeakDetectionInterval 泄漏检测循环间隔
-	// 如果为0，默认为 ConnectionLeakTimeout 的一半（最小1秒，最大1分钟）
+	// LeakDetectionInterval leak detection loop interval
+	// If 0, defaults to half of ConnectionLeakTimeout (min 1 second, max 1 minute)
 	LeakDetectionInterval time.Duration
 
-	// Dialer 连接创建函数（客户端模式必需）
-	// 在客户端模式下，用于主动创建连接到服务器
+	// Dialer connection creation function (required for client mode)
+	// In client mode, used to actively create connections to server
 	Dialer Dialer
 
-	// Listener 网络监听器（服务器端模式必需）
-	// 在服务器端模式下，用于接受客户端连接
+	// Listener network listener (required for server mode)
+	// In server mode, used to accept client connections
 	Listener net.Listener
 
-	// Acceptor 连接接受函数（服务器端模式可选）
-	// 在服务器端模式下，用于从Listener接受连接
-	// 如果为nil，将使用默认的Accept方法
+	// Acceptor connection accept function (optional for server mode)
+	// In server mode, used to accept connections from Listener
+	// If nil, default Accept method will be used
 	Acceptor Acceptor
 
-	// HealthChecker 健康检查函数（可选）
-	// 如果为nil，将使用默认的ping检查
+	// HealthChecker health check function (optional)
+	// If nil, default ping check will be used
 	HealthChecker HealthChecker
 
-	// CloseConn 连接关闭函数（可选）
-	// 如果为nil，将尝试类型断言为io.Closer并调用Close方法
+	// CloseConn connection close function (optional)
+	// If nil, will try type assertion to io.Closer and call Close method
 	CloseConn func(conn net.Conn) error
 
-	// OnCreated 连接创建后调用
+	// OnCreated called after connection is created
 	OnCreated func(conn net.Conn) error
 
-	// OnBorrow 连接从池中取出前调用
+	// OnBorrow called before connection is taken from pool
 	OnBorrow func(conn net.Conn)
 
-	// OnReturn 连接归还池中前调用
+	// OnReturn called before connection is returned to pool
 	OnReturn func(conn net.Conn)
 
-	// EnableStats 是否启用统计信息
+	// EnableStats whether to enable statistics
 	EnableStats bool
 
-	// EnableHealthCheck 是否启用健康检查
+	// EnableHealthCheck whether to enable health check
 	EnableHealthCheck bool
 
-	// ClearUDPBufferOnReturn 是否在归还UDP连接时清空读取缓冲区
-	// 启用此选项可以防止UDP连接复用时的数据混淆
-	// 默认值为true，建议保持启用
+	// ClearUDPBufferOnReturn whether to clear read buffer when returning UDP connection
+	// Enabling this option can prevent data confusion when UDP connections are reused
+	// Default value is true, recommended to keep enabled
 	ClearUDPBufferOnReturn bool
 
-	// UDPBufferClearTimeout UDP缓冲区清理超时时间
-	// 如果为0，将使用默认值100ms
+	// UDPBufferClearTimeout UDP buffer clear timeout
+	// If 0, defaults to 100ms
 	UDPBufferClearTimeout time.Duration
 
-	// MaxBufferClearPackets UDP缓冲区清理最大包数
-	// 默认值: 100
+	// MaxBufferClearPackets max packets to clear from UDP buffer
+	// Default: 100
 	MaxBufferClearPackets int
 }
 
-// DefaultConfig 返回默认配置（客户端模式）
+// DefaultConfig returns default configuration (client mode)
 func DefaultConfig() *Config {
 	return &Config{
-		Mode:                   PoolModeClient, // 默认客户端模式
+		Mode:                   PoolModeClient, // default client mode
 		MaxConnections:         10,
 		MinConnections:         2,
 		MaxIdleConnections:     10,
@@ -152,18 +152,18 @@ func DefaultConfig() *Config {
 		ConnectionLeakTimeout:  5 * time.Minute,
 		EnableStats:            true,
 		EnableHealthCheck:      true,
-		ClearUDPBufferOnReturn: true,                   // 默认启用UDP缓冲区清理
-		UDPBufferClearTimeout:  100 * time.Millisecond, // 默认100ms超时
-		MaxBufferClearPackets:  100,                    // 默认清理100个包
+		ClearUDPBufferOnReturn: true,                   // default enable UDP buffer clear
+		UDPBufferClearTimeout:  100 * time.Millisecond, // default 100ms timeout
+		MaxBufferClearPackets:  100,                    // default clear 100 packets
 	}
 }
 
-// DefaultServerConfig 返回默认服务器端配置
+// DefaultServerConfig returns default server configuration
 func DefaultServerConfig() *Config {
 	return &Config{
-		Mode:                   PoolModeServer, // 服务器端模式
-		MaxConnections:         100,            // 服务器端通常需要更多连接
-		MinConnections:         0,              // 服务器端通常不需要预热
+		Mode:                   PoolModeServer, // server mode
+		MaxConnections:         100,            // server usually needs more connections
+		MinConnections:         0,              // server usually doesn't need warm-up
 		MaxIdleConnections:     50,
 		ConnectionTimeout:      10 * time.Second,
 		IdleTimeout:            5 * time.Minute,
@@ -180,21 +180,21 @@ func DefaultServerConfig() *Config {
 	}
 }
 
-// Validate 验证配置有效性
+// Validate validates configuration validity
 func (c *Config) Validate() error {
-	// 根据模式验证必需的配置
+	// Validate required configuration based on mode
 	switch c.Mode {
 	case PoolModeClient:
-		// 客户端模式需要Dialer
+		// Client mode requires Dialer
 		if c.Dialer == nil {
 			return ErrInvalidConfig
 		}
 	case PoolModeServer:
-		// 服务器端模式需要Listener
+		// Server mode requires Listener
 		if c.Listener == nil {
 			return ErrInvalidConfig
 		}
-		// 如果未提供Acceptor，使用默认的Accept方法
+		// If Acceptor is not provided, use default Accept method
 		if c.Acceptor == nil {
 			c.Acceptor = defaultAcceptor
 		}
@@ -215,17 +215,17 @@ func (c *Config) Validate() error {
 		return ErrInvalidConfig
 	}
 	if c.MaxIdleConnections > 0 && c.MaxConnections > 0 && c.MaxIdleConnections > c.MaxConnections {
-		// 最大空闲连接数不应超过最大连接数
+		// Max idle connections should not exceed max connections
 		c.MaxIdleConnections = c.MaxConnections
 	}
 	if c.HealthCheckInterval > 0 && c.HealthCheckTimeout > c.HealthCheckInterval {
-		// 健康检查超时不应超过检查间隔
+		// Health check timeout should not exceed check interval
 		c.HealthCheckTimeout = c.HealthCheckInterval / 2
 	}
 	if c.MaxBufferClearPackets <= 0 {
 		c.MaxBufferClearPackets = 100
 	}
-	// 如果未设置泄漏检测间隔，自动计算
+	// If leak detection interval is not set, calculate automatically
 	if c.LeakDetectionInterval <= 0 && c.ConnectionLeakTimeout > 0 {
 		c.LeakDetectionInterval = c.ConnectionLeakTimeout / 2
 		if c.LeakDetectionInterval < 1*time.Second {
@@ -238,26 +238,26 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// defaultAcceptor 默认的连接接受函数
+// defaultAcceptor default connection accept function
 func defaultAcceptor(ctx context.Context, listener net.Listener) (net.Conn, error) {
-	// 使用带超时的Accept
+	// Use Accept with timeout
 	type result struct {
 		conn net.Conn
 		err  error
 	}
 	resultChan := make(chan result, 1)
-	// 用于通知goroutine退出的channel
+	// Channel to notify goroutine to exit
 	doneChan := make(chan struct{})
 
 	go func() {
 		defer close(doneChan)
 		conn, err := listener.Accept()
-		// 使用非阻塞发送，确保goroutine不会卡住
+		// Use non-blocking send to ensure goroutine won't block forever
 		select {
 		case resultChan <- result{conn: conn, err: err}:
-			// 成功发送结果
+			// Successfully sent result
 		case <-ctx.Done():
-			// Context已取消，关闭连接（如果有）并退出，防止goroutine泄漏
+			// Context cancelled, close connection (if any) and exit to prevent goroutine leak
 			if conn != nil {
 				conn.Close()
 			}
@@ -268,12 +268,12 @@ func defaultAcceptor(ctx context.Context, listener net.Listener) (net.Conn, erro
 	case res := <-resultChan:
 		return res.conn, res.err
 	case <-ctx.Done():
-		// 等待goroutine退出或超时，防止goroutine泄漏
+		// Wait for goroutine to exit or timeout to prevent goroutine leak
 		select {
 		case <-doneChan:
-			// goroutine已退出
+			// Goroutine has exited
 		case <-time.After(100 * time.Millisecond):
-			// 超时，继续返回
+			// Timeout, continue
 		}
 		return nil, ctx.Err()
 	}

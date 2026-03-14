@@ -34,61 +34,61 @@ import (
 	"time"
 )
 
-// Stats 连接池统计信息
+// Stats connection pool statistics
 type Stats struct {
-	// 连接相关统计
-	TotalConnectionsCreated  int64 // 累计创建的连接数
-	TotalConnectionsClosed   int64 // 累计关闭的连接数
-	CurrentConnections       int64 // 当前连接数
-	CurrentIdleConnections   int64 // 当前空闲连接数
-	CurrentActiveConnections int64 // 当前活跃连接数
+	// Connection related statistics
+	TotalConnectionsCreated  int64 // total connections created
+	TotalConnectionsClosed   int64 // total connections closed
+	CurrentConnections       int64 // current connection count
+	CurrentIdleConnections   int64 // current idle connection count
+	CurrentActiveConnections int64 // current active connection count
 
-	// IP版本相关统计
-	CurrentIPv4Connections     int64 // 当前IPv4连接数
-	CurrentIPv6Connections     int64 // 当前IPv6连接数
-	CurrentIPv4IdleConnections int64 // 当前IPv4空闲连接数
-	CurrentIPv6IdleConnections int64 // 当前IPv6空闲连接数
+	// IP version related statistics
+	CurrentIPv4Connections     int64 // current IPv4 connection count
+	CurrentIPv6Connections     int64 // current IPv6 connection count
+	CurrentIPv4IdleConnections int64 // current IPv4 idle connection count
+	CurrentIPv6IdleConnections int64 // current IPv6 idle connection count
 
-	// 协议相关统计
-	CurrentTCPConnections     int64 // 当前TCP连接数
-	CurrentUDPConnections     int64 // 当前UDP连接数
-	CurrentTCPIdleConnections int64 // 当前TCP空闲连接数
-	CurrentUDPIdleConnections int64 // 当前UDP空闲连接数
+	// Protocol related statistics
+	CurrentTCPConnections     int64 // current TCP connection count
+	CurrentUDPConnections     int64 // current UDP connection count
+	CurrentTCPIdleConnections int64 // current TCP idle connection count
+	CurrentUDPIdleConnections int64 // current UDP idle connection count
 
-	// 请求相关统计
-	TotalGetRequests int64 // 累计获取连接请求数
-	SuccessfulGets   int64 // 成功获取连接数
-	FailedGets       int64 // 失败获取连接数
-	TimeoutGets      int64 // 超时获取连接数
+	// Request related statistics
+	TotalGetRequests int64 // total get connection requests
+	SuccessfulGets   int64 // successful get connections
+	FailedGets       int64 // failed get connections
+	TimeoutGets      int64 // timeout get connections
 
-	// 健康检查相关统计
-	HealthCheckAttempts  int64 // 健康检查尝试次数
-	HealthCheckFailures  int64 // 健康检查失败次数
-	UnhealthyConnections int64 // 不健康连接数
+	// Health check related statistics
+	HealthCheckAttempts  int64 // health check attempts
+	HealthCheckFailures  int64 // health check failures
+	UnhealthyConnections int64 // unhealthy connection count
 
-	// 错误相关统计
-	ConnectionErrors  int64 // 连接错误数
-	LeakedConnections int64 // 泄漏的连接数
+	// Error related statistics
+	ConnectionErrors  int64 // connection errors
+	LeakedConnections int64 // leaked connections
 
-	// 连接复用相关统计
-	TotalConnectionsReused int64   // 累计连接复用次数（从空闲池获取的次数）
-	AverageReuseCount      float64 // 平均每个连接的复用次数
+	// Connection reuse related statistics
+	TotalConnectionsReused int64   // total connection reuse count (times obtained from idle pool)
+	AverageReuseCount      float64 // average reuse count per connection
 
-	// 时间相关统计
-	AverageGetTime time.Duration // 平均获取连接时间
-	TotalGetTime   time.Duration // 总获取连接时间
+	// Time related statistics
+	AverageGetTime time.Duration // average get connection time
+	TotalGetTime   time.Duration // total get connection time
 
-	// 最后更新时间
+	// Last update time
 	LastUpdateTime time.Time
 }
 
-// StatsCollector 统计收集器
+// StatsCollector statistics collector
 type StatsCollector struct {
 	stats Stats
-	mu    sync.RWMutex // 保护 LastUpdateTime
+	mu    sync.RWMutex // protects LastUpdateTime
 }
 
-// NewStatsCollector 创建统计收集器
+// NewStatsCollector creates a statistics collector
 func NewStatsCollector() *StatsCollector {
 	return &StatsCollector{
 		stats: Stats{
@@ -97,96 +97,96 @@ func NewStatsCollector() *StatsCollector {
 	}
 }
 
-// IncrementTotalConnectionsCreated 增加创建连接计数
+// IncrementTotalConnectionsCreated increments created connection count
 func (s *StatsCollector) IncrementTotalConnectionsCreated() {
 	atomic.AddInt64(&s.stats.TotalConnectionsCreated, 1)
 	atomic.AddInt64(&s.stats.CurrentConnections, 1)
 	s.updateTime()
 }
 
-// IncrementTotalConnectionsClosed 增加关闭连接计数
+// IncrementTotalConnectionsClosed increments closed connection count
 func (s *StatsCollector) IncrementTotalConnectionsClosed() {
 	atomic.AddInt64(&s.stats.TotalConnectionsClosed, 1)
 	atomic.AddInt64(&s.stats.CurrentConnections, -1)
 	s.updateTime()
 }
 
-// IncrementCurrentIdleConnections 增加空闲连接计数
+// IncrementCurrentIdleConnections increments idle connection count
 func (s *StatsCollector) IncrementCurrentIdleConnections(delta int64) {
 	atomic.AddInt64(&s.stats.CurrentIdleConnections, delta)
 	s.updateTime()
 }
 
-// IncrementCurrentActiveConnections 增加活跃连接计数
+// IncrementCurrentActiveConnections increments active connection count
 func (s *StatsCollector) IncrementCurrentActiveConnections(delta int64) {
 	atomic.AddInt64(&s.stats.CurrentActiveConnections, delta)
 	s.updateTime()
 }
 
-// IncrementTotalGetRequests 增加获取请求计数
+// IncrementTotalGetRequests increments get request count
 func (s *StatsCollector) IncrementTotalGetRequests() {
 	atomic.AddInt64(&s.stats.TotalGetRequests, 1)
 	s.updateTime()
 }
 
-// IncrementSuccessfulGets 增加成功获取计数
+// IncrementSuccessfulGets increments successful get count
 func (s *StatsCollector) IncrementSuccessfulGets() {
 	atomic.AddInt64(&s.stats.SuccessfulGets, 1)
 	s.updateTime()
 }
 
-// IncrementFailedGets 增加失败获取计数
+// IncrementFailedGets increments failed get count
 func (s *StatsCollector) IncrementFailedGets() {
 	atomic.AddInt64(&s.stats.FailedGets, 1)
 	s.updateTime()
 }
 
-// IncrementTimeoutGets 增加超时获取计数
+// IncrementTimeoutGets increments timeout get count
 func (s *StatsCollector) IncrementTimeoutGets() {
 	atomic.AddInt64(&s.stats.TimeoutGets, 1)
 	s.updateTime()
 }
 
-// IncrementHealthCheckAttempts 增加健康检查尝试计数
+// IncrementHealthCheckAttempts increments health check attempt count
 func (s *StatsCollector) IncrementHealthCheckAttempts() {
 	atomic.AddInt64(&s.stats.HealthCheckAttempts, 1)
 	s.updateTime()
 }
 
-// IncrementHealthCheckFailures 增加健康检查失败计数
+// IncrementHealthCheckFailures increments health check failure count
 func (s *StatsCollector) IncrementHealthCheckFailures() {
 	atomic.AddInt64(&s.stats.HealthCheckFailures, 1)
 	s.updateTime()
 }
 
-// IncrementUnhealthyConnections 增加不健康连接计数
+// IncrementUnhealthyConnections increments unhealthy connection count
 func (s *StatsCollector) IncrementUnhealthyConnections() {
 	atomic.AddInt64(&s.stats.UnhealthyConnections, 1)
 	s.updateTime()
 }
 
-// IncrementConnectionErrors 增加连接错误计数
+// IncrementConnectionErrors increments connection error count
 func (s *StatsCollector) IncrementConnectionErrors() {
 	atomic.AddInt64(&s.stats.ConnectionErrors, 1)
 	s.updateTime()
 }
 
-// IncrementLeakedConnections 增加泄漏连接计数
+// IncrementLeakedConnections increments leaked connection count
 func (s *StatsCollector) IncrementLeakedConnections() {
 	atomic.AddInt64(&s.stats.LeakedConnections, 1)
 	s.updateTime()
 }
 
-// RecordGetTime 记录获取连接的时间
+// RecordGetTime records get connection time
 func (s *StatsCollector) RecordGetTime(duration time.Duration) {
 	atomic.AddInt64((*int64)(&s.stats.TotalGetTime), int64(duration))
-	// 计算平均时间
-	// 使用重试机制减少竞态条件的影响
+	// Calculate average time
+	// Use retry mechanism to reduce race condition impact
 	for i := 0; i < 3; i++ {
 		totalGets := atomic.LoadInt64(&s.stats.SuccessfulGets)
 		if totalGets > 0 {
 			totalTime := atomic.LoadInt64((*int64)(&s.stats.TotalGetTime))
-			// 再次检查 totalGets，如果变化不大则使用
+			// Check totalGets again, if not much changed then use it
 			totalGets2 := atomic.LoadInt64(&s.stats.SuccessfulGets)
 			if totalGets == totalGets2 || totalGets2 == 0 {
 				if totalGets2 > 0 {
@@ -195,7 +195,7 @@ func (s *StatsCollector) RecordGetTime(duration time.Duration) {
 				}
 				break
 			}
-			// 如果 totalGets 变化很大，重试
+			// If totalGets changed significantly, retry
 		} else {
 			break
 		}
@@ -203,7 +203,7 @@ func (s *StatsCollector) RecordGetTime(duration time.Duration) {
 	s.updateTime()
 }
 
-// GetStats 获取当前统计信息快照
+// GetStats gets current statistics snapshot
 func (s *StatsCollector) GetStats() Stats {
 	return Stats{
 		TotalConnectionsCreated:    atomic.LoadInt64(&s.stats.TotalConnectionsCreated),
@@ -236,61 +236,61 @@ func (s *StatsCollector) GetStats() Stats {
 	}
 }
 
-// IncrementCurrentIPv4Connections 增加IPv4连接计数
+// IncrementCurrentIPv4Connections increments IPv4 connection count
 func (s *StatsCollector) IncrementCurrentIPv4Connections(delta int64) {
 	atomic.AddInt64(&s.stats.CurrentIPv4Connections, delta)
 	s.updateTime()
 }
 
-// IncrementCurrentIPv6Connections 增加IPv6连接计数
+// IncrementCurrentIPv6Connections increments IPv6 connection count
 func (s *StatsCollector) IncrementCurrentIPv6Connections(delta int64) {
 	atomic.AddInt64(&s.stats.CurrentIPv6Connections, delta)
 	s.updateTime()
 }
 
-// IncrementCurrentIPv4IdleConnections 增加IPv4空闲连接计数
+// IncrementCurrentIPv4IdleConnections increments IPv4 idle connection count
 func (s *StatsCollector) IncrementCurrentIPv4IdleConnections(delta int64) {
 	atomic.AddInt64(&s.stats.CurrentIPv4IdleConnections, delta)
 	s.updateTime()
 }
 
-// IncrementCurrentIPv6IdleConnections 增加IPv6空闲连接计数
+// IncrementCurrentIPv6IdleConnections increments IPv6 idle connection count
 func (s *StatsCollector) IncrementCurrentIPv6IdleConnections(delta int64) {
 	atomic.AddInt64(&s.stats.CurrentIPv6IdleConnections, delta)
 	s.updateTime()
 }
 
-// IncrementCurrentTCPConnections 增加TCP连接计数
+// IncrementCurrentTCPConnections increments TCP connection count
 func (s *StatsCollector) IncrementCurrentTCPConnections(delta int64) {
 	atomic.AddInt64(&s.stats.CurrentTCPConnections, delta)
 	s.updateTime()
 }
 
-// IncrementCurrentUDPConnections 增加UDP连接计数
+// IncrementCurrentUDPConnections increments UDP connection count
 func (s *StatsCollector) IncrementCurrentUDPConnections(delta int64) {
 	atomic.AddInt64(&s.stats.CurrentUDPConnections, delta)
 	s.updateTime()
 }
 
-// IncrementCurrentTCPIdleConnections 增加TCP空闲连接计数
+// IncrementCurrentTCPIdleConnections increments TCP idle connection count
 func (s *StatsCollector) IncrementCurrentTCPIdleConnections(delta int64) {
 	atomic.AddInt64(&s.stats.CurrentTCPIdleConnections, delta)
 	s.updateTime()
 }
 
-// IncrementCurrentUDPIdleConnections 增加UDP空闲连接计数
+// IncrementCurrentUDPIdleConnections increments UDP idle connection count
 func (s *StatsCollector) IncrementCurrentUDPIdleConnections(delta int64) {
 	atomic.AddInt64(&s.stats.CurrentUDPIdleConnections, delta)
 	s.updateTime()
 }
 
-// IncrementTotalConnectionsReused 增加连接复用计数
+// IncrementTotalConnectionsReused increments connection reuse count
 func (s *StatsCollector) IncrementTotalConnectionsReused() {
 	atomic.AddInt64(&s.stats.TotalConnectionsReused, 1)
 	s.updateTime()
 }
 
-// calculateAverageReuseCount 计算平均复用次数
+// calculateAverageReuseCount calculates average reuse count
 func (s *StatsCollector) calculateAverageReuseCount() float64 {
 	totalCreated := atomic.LoadInt64(&s.stats.TotalConnectionsCreated)
 	if totalCreated == 0 {
@@ -306,7 +306,7 @@ func (s *StatsCollector) updateTime() {
 	s.mu.RUnlock()
 
 	now := time.Now()
-	// 减少时间更新频率，每100ms更新一次
+	// Reduce time update frequency, update every 100ms
 	if now.Sub(oldTime) < 100*time.Millisecond {
 		return
 	}

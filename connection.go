@@ -36,59 +36,59 @@ import (
 )
 
 var (
-	// connectionIDGenerator 连接ID生成器
+	// connectionIDGenerator connection ID generator
 	connectionIDGenerator uint64
 )
 
-// Connection 连接封装
+// Connection connection wrapper
 type Connection struct {
-	// ID 连接唯一标识符
+	// ID connection unique identifier
 	ID uint64
 
-	// Conn 底层连接对象
+	// Conn underlying connection object
 	Conn net.Conn
 
-	// Protocol 协议类型（TCP或UDP）
+	// Protocol protocol type (TCP or UDP)
 	Protocol Protocol
 
-	// IPVersion IP版本（IPv4或IPv6）
+	// IPVersion IP version (IPv4 or IPv6)
 	IPVersion IPVersion
 
-	// CreatedAt 创建时间
+	// CreatedAt creation time
 	CreatedAt time.Time
 
-	// LastUsedAt 最后使用时间
+	// LastUsedAt last used time
 	LastUsedAt time.Time
 
-	// LastHealthCheckAt 最后健康检查时间
+	// LastHealthCheckAt last health check time
 	LastHealthCheckAt time.Time
 
-	// IsHealthy 是否健康
+	// IsHealthy whether healthy
 	IsHealthy bool
 
-	// InUse 是否正在使用中
+	// InUse whether in use
 	InUse bool
 
-	// LeakDetected 是否检测到泄漏
+	// LeakDetected whether leak detected
 	LeakDetected bool
 
-	// ReuseCount 连接复用次数（从连接池中获取的次数）
+	// ReuseCount connection reuse count (times obtained from connection pool)
 	ReuseCount int64
 
-	// mu 保护连接的互斥锁
+	// mu mutex protecting connection
 	mu sync.RWMutex
 
-	// pool 所属的连接池
+	// pool belonging connection pool
 	pool *Pool
 
-	// onClose 关闭回调
+	// onClose close callback
 	onClose func() error
 }
 
-// NewConnection 创建新连接
+// NewConnection creates a new connection
 func NewConnection(conn net.Conn, pool *Pool, onClose func() error) *Connection {
 	now := time.Now()
-	// 自动检测协议类型和IP版本
+	// Auto-detect protocol type and IP version
 	protocol := DetectProtocol(conn)
 	ipVersion := DetectIPVersion(conn)
 
@@ -109,24 +109,24 @@ func NewConnection(conn net.Conn, pool *Pool, onClose func() error) *Connection 
 	}
 }
 
-// GetProtocol 获取连接的协议类型（无锁，因为Protocol在创建后不会改变）
+// GetProtocol gets connection protocol type (lock-free, Protocol doesn't change after creation)
 func (c *Connection) GetProtocol() Protocol {
 	return c.Protocol
 }
 
-// GetIPVersion 获取连接的IP版本（无锁，因为IPVersion在创建后不会改变）
+// GetIPVersion gets connection IP version (lock-free, IPVersion doesn't change after creation)
 func (c *Connection) GetIPVersion() IPVersion {
 	return c.IPVersion
 }
 
-// GetConn 获取底层连接对象
+// GetConn gets underlying connection object
 func (c *Connection) GetConn() net.Conn {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.Conn
 }
 
-// MarkInUse 标记为使用中
+// MarkInUse marks as in use
 func (c *Connection) MarkInUse() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -134,7 +134,7 @@ func (c *Connection) MarkInUse() {
 	c.LastUsedAt = time.Now()
 }
 
-// MarkIdle 标记为空闲
+// MarkIdle marks as idle
 func (c *Connection) MarkIdle() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -142,7 +142,7 @@ func (c *Connection) MarkIdle() {
 	c.LastUsedAt = time.Now()
 }
 
-// UpdateHealth 更新健康状态
+// UpdateHealth updates health status
 func (c *Connection) UpdateHealth(healthy bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -150,7 +150,7 @@ func (c *Connection) UpdateHealth(healthy bool) {
 	c.LastHealthCheckAt = time.Now()
 }
 
-// IsExpired 检查连接是否过期（超过MaxLifetime）
+// IsExpired checks if connection is expired (exceeds MaxLifetime)
 func (c *Connection) IsExpired(maxLifetime time.Duration) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -160,7 +160,7 @@ func (c *Connection) IsExpired(maxLifetime time.Duration) bool {
 	return time.Since(c.CreatedAt) > maxLifetime
 }
 
-// IsIdleTooLong 检查连接是否空闲太久（超过IdleTimeout）
+// IsIdleTooLong checks if connection has been idle too long (exceeds IdleTimeout)
 func (c *Connection) IsIdleTooLong(idleTimeout time.Duration) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -170,7 +170,7 @@ func (c *Connection) IsIdleTooLong(idleTimeout time.Duration) bool {
 	return !c.InUse && time.Since(c.LastUsedAt) > idleTimeout
 }
 
-// IsLeaked 检查连接是否泄漏（超过ConnectionLeakTimeout且仍在使用时）
+// IsLeaked checks if connection is leaked (exceeds ConnectionLeakTimeout and still in use)
 func (c *Connection) IsLeaked(leakTimeout time.Duration) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -180,7 +180,7 @@ func (c *Connection) IsLeaked(leakTimeout time.Duration) bool {
 	return time.Since(c.LastUsedAt) > leakTimeout
 }
 
-// Close 关闭连接
+// Close closes connection
 func (c *Connection) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -193,21 +193,21 @@ func (c *Connection) Close() error {
 	if c.onClose != nil {
 		err = c.onClose()
 	} else {
-		// 确保即使 onClose 为 nil，底层连接也被关闭
+		// Ensure underlying connection is closed even if onClose is nil
 		err = c.Conn.Close()
 	}
 	c.Conn = nil
 	return err
 }
 
-// GetAge 获取连接年龄
+// GetAge gets connection age
 func (c *Connection) GetAge() time.Duration {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return time.Since(c.CreatedAt)
 }
 
-// GetIdleTime 获取空闲时间
+// GetIdleTime gets idle time
 func (c *Connection) GetIdleTime() time.Duration {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -217,28 +217,28 @@ func (c *Connection) GetIdleTime() time.Duration {
 	return time.Since(c.LastUsedAt)
 }
 
-// IncrementReuseCount 增加复用次数
+// IncrementReuseCount increments reuse count
 func (c *Connection) IncrementReuseCount() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.ReuseCount++
 }
 
-// GetReuseCount 获取复用次数
+// GetReuseCount gets reuse count
 func (c *Connection) GetReuseCount() int64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.ReuseCount
 }
 
-// IsInUse 检查连接是否正在使用中（线程安全）
+// IsInUse checks if connection is in use (thread-safe)
 func (c *Connection) IsInUse() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.InUse
 }
 
-// GetHealthStatus 获取连接健康状态（线程安全）
+// GetHealthStatus gets connection health status (thread-safe)
 func (c *Connection) GetHealthStatus() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

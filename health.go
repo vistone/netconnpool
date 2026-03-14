@@ -36,7 +36,7 @@ import (
 	"time"
 )
 
-// HealthCheckManager 健康检查管理器
+// HealthCheckManager health check manager
 type HealthCheckManager struct {
 	pool     *Pool
 	config   *Config
@@ -47,7 +47,7 @@ type HealthCheckManager struct {
 	running  bool
 }
 
-// NewHealthCheckManager 创建健康检查管理器
+// NewHealthCheckManager creates health check manager
 func NewHealthCheckManager(pool *Pool, config *Config) *HealthCheckManager {
 	return &HealthCheckManager{
 		pool:     pool,
@@ -57,7 +57,7 @@ func NewHealthCheckManager(pool *Pool, config *Config) *HealthCheckManager {
 	}
 }
 
-// Start 启动健康检查
+// Start starts health check
 func (h *HealthCheckManager) Start() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -73,7 +73,7 @@ func (h *HealthCheckManager) Start() {
 	go h.healthCheckLoop()
 }
 
-// Stop 停止健康检查
+// Stop stops health check
 func (h *HealthCheckManager) Stop() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -90,7 +90,7 @@ func (h *HealthCheckManager) Stop() {
 	h.wg.Wait()
 }
 
-// healthCheckLoop 健康检查循环
+// healthCheckLoop health check loop
 func (h *HealthCheckManager) healthCheckLoop() {
 	defer h.wg.Done()
 
@@ -104,11 +104,11 @@ func (h *HealthCheckManager) healthCheckLoop() {
 	}
 }
 
-// performHealthCheck 执行健康检查
+// performHealthCheck performs health check
 func (h *HealthCheckManager) performHealthCheck() {
 	connections := h.pool.getAllConnections()
 
-	// 并发执行健康检查，但限制并发数
+	// Perform health checks concurrently, but limit concurrency
 	const maxConcurrentChecks = 10
 	semaphore := make(chan struct{}, maxConcurrentChecks)
 	var wg sync.WaitGroup
@@ -117,7 +117,7 @@ func (h *HealthCheckManager) performHealthCheck() {
 		wg.Add(1)
 		go func(c *Connection) {
 			defer wg.Done()
-			// 获取信号量
+			// Acquire semaphore
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
 			h.checkConnection(c)
@@ -127,9 +127,9 @@ func (h *HealthCheckManager) performHealthCheck() {
 	wg.Wait()
 }
 
-// checkConnection 检查单个连接
+// checkConnection checks a single connection
 func (h *HealthCheckManager) checkConnection(conn *Connection) {
-	// 跳过正在使用中的连接
+	// Skip connections that are in use
 	conn.mu.RLock()
 	inUse := conn.InUse
 	conn.mu.RUnlock()
@@ -142,26 +142,26 @@ func (h *HealthCheckManager) checkConnection(conn *Connection) {
 	defer cancel()
 
 	done := make(chan bool, 1)
-	// 用于通知goroutine退出的channel
+	// Channel to notify goroutine to exit
 	exitChan := make(chan struct{})
 
-	// 使用带缓冲的channel，确保goroutine不会永远阻塞
+	// Use buffered channel to ensure goroutine won't block forever
 	go func() {
-		defer close(exitChan) // 确保goroutine退出时通知主线程
+		defer close(exitChan) // Ensure goroutine notifies main thread when exiting
 		defer func() {
-			// 防止panic
+			// Prevent panic
 			if r := recover(); r != nil {
 				select {
 				case done <- false:
 				case <-ctx.Done():
-					// Context已取消，goroutine可以安全退出
+					// Context cancelled, goroutine can exit safely
 				}
 			}
 		}()
-		// 检查context是否已取消
+		// Check if context is cancelled
 		select {
 		case <-ctx.Done():
-			// Context已取消，goroutine可以安全退出
+			// Context cancelled, goroutine can exit safely
 			return
 		default:
 		}
@@ -169,7 +169,7 @@ func (h *HealthCheckManager) checkConnection(conn *Connection) {
 		select {
 		case done <- healthy:
 		case <-ctx.Done():
-			// 上下文已取消，goroutine可以安全退出
+			// Context cancelled, goroutine can exit safely
 		}
 	}()
 
@@ -183,73 +183,73 @@ func (h *HealthCheckManager) checkConnection(conn *Connection) {
 				h.pool.statsCollector.IncrementUnhealthyConnections()
 			}
 		}
-		// 等待goroutine退出
+		// Wait for goroutine to exit
 		select {
 		case <-exitChan:
 		case <-time.After(100 * time.Millisecond):
-			// 超时，继续
+			// Timeout, continue
 		}
 	case <-ctx.Done():
-		// 健康检查超时，标记为不健康
+		// Health check timeout, mark as unhealthy
 		conn.UpdateHealth(false)
 		if h.pool.statsCollector != nil {
 			h.pool.statsCollector.IncrementHealthCheckAttempts()
 			h.pool.statsCollector.IncrementHealthCheckFailures()
 		}
-		// 等待goroutine退出或超时
+		// Wait for goroutine to exit or timeout
 		select {
 		case <-exitChan:
 		case <-time.After(100 * time.Millisecond):
-			// 给goroutine一点时间退出
+			// Give goroutine some time to exit
 		}
 	}
 }
 
-// performCheck 执行实际的健康检查
+// performCheck performs actual health check
 func (h *HealthCheckManager) performCheck(conn net.Conn) bool {
-	// 如果配置了自定义健康检查函数，使用它
+	// If custom health check function is configured, use it
 	if h.config.HealthChecker != nil {
 		return h.config.HealthChecker(conn)
 	}
 
-	// 检查是否是UDP连接
+	// Check if UDP connection
 	if udpConn, ok := conn.(*net.UDPConn); ok {
-		// UDP连接的特殊健康检查
-		// UDP是无连接的，不能像TCP那样读取数据来判断健康状态
-		// 我们通过检查连接是否已关闭来判断
+		// Special health check for UDP connections
+		// UDP is connectionless, cannot determine health status by reading data like TCP
+		// We determine by checking if connection is closed
 
-		// 设置极短的读取超时进行探测
+		// Set very short read timeout for probe
 		udpConn.SetReadDeadline(time.Now().Add(1 * time.Millisecond))
 		defer udpConn.SetReadDeadline(time.Time{})
 
-		// 尝试读取一个字节，如果能读到说明连接正常（即使没有数据也会超时）
+		// Try to read one byte, if can read, connection is normal (even timeout means connection is alive)
 		buf := make([]byte, 1)
 		_, err := udpConn.Read(buf)
 		if err != nil {
-			// 超时错误是正常的，说明连接还活着（只是没有数据）
+			// Timeout error is normal, means connection is alive (just no data)
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				return true
 			}
-			// EOF错误表示连接已关闭
+			// EOF error means connection is closed
 			if err == io.EOF {
 				return false
 			}
-			// 对于UDP，其他错误（如连接关闭、网络错误等）应该认为不健康
-			// 只有超时错误才表示连接正常（只是没有数据）
+			// For UDP, other errors (like connection closed, network error) should be considered unhealthy
+			// Only timeout error means connection is normal (just no data)
 			return false
 		}
-		// 如果能读到数据，说明连接正常
+		// If can read data, connection is normal
 		return true
 	}
 
-	// 默认健康检查：通过带超时的读取探测连接状态
-	// 超时错误表示连接存活（无数据可读但连接正常）
-	// EOF表示对端关闭了连接
-	// 注意：如果连接有缓冲数据，Read会消耗一个字节
+	// Default health check: probe connection status with timeout read
+	// Timeout error means connection is alive (no data readable but connection is normal)
+	// EOF means peer closed connection
+	// Note: If connection has buffered data, Read will consume one byte
 	return h.readProbeCheck(conn)
 }
 
-// readProbeCheck 通过带超时的读取探测连接健康状态
+// readProbeCheck probes connection health status with timeout read
 func (h *HealthCheckManager) readProbeCheck(conn net.Conn) bool {
 	conn.SetReadDeadline(time.Now().Add(h.config.HealthCheckTimeout))
 	one := make([]byte, 1)
@@ -258,11 +258,11 @@ func (h *HealthCheckManager) readProbeCheck(conn net.Conn) bool {
 	if err == io.EOF {
 		return false
 	}
-	// 超时表示连接存活但没有数据，属于正常
+	// Timeout means connection is alive but no data, which is normal
 	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 		return true
 	}
-	// 其他错误（非超时、非EOF），连接可能已断开
+	// Other errors (non-timeout, non-EOF), connection may be disconnected
 	if err != nil {
 		return false
 	}

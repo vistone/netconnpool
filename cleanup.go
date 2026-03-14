@@ -33,7 +33,7 @@ import (
 	"time"
 )
 
-// CleanupManager 清理管理器
+// CleanupManager cleanup manager
 type CleanupManager struct {
 	pool     *Pool
 	config   *Config
@@ -44,7 +44,7 @@ type CleanupManager struct {
 	running  bool
 }
 
-// NewCleanupManager 创建清理管理器
+// NewCleanupManager creates cleanup manager
 func NewCleanupManager(pool *Pool, config *Config) *CleanupManager {
 	return &CleanupManager{
 		pool:     pool,
@@ -54,7 +54,7 @@ func NewCleanupManager(pool *Pool, config *Config) *CleanupManager {
 	}
 }
 
-// Start 启动清理管理器
+// Start starts cleanup manager
 func (c *CleanupManager) Start() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -64,14 +64,14 @@ func (c *CleanupManager) Start() {
 	}
 
 	c.running = true
-	// 每30秒清理一次
+	// Clean up every 30 seconds
 	c.ticker = time.NewTicker(30 * time.Second)
 
 	c.wg.Add(1)
 	go c.cleanupLoop()
 }
 
-// Stop 停止清理管理器
+// Stop stops cleanup manager
 func (c *CleanupManager) Stop() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -88,7 +88,7 @@ func (c *CleanupManager) Stop() {
 	c.wg.Wait()
 }
 
-// cleanupLoop 清理循环
+// cleanupLoop cleanup loop
 func (c *CleanupManager) cleanupLoop() {
 	defer c.wg.Done()
 
@@ -102,92 +102,92 @@ func (c *CleanupManager) cleanupLoop() {
 	}
 }
 
-// performCleanup 执行清理
+// performCleanup performs cleanup
 func (c *CleanupManager) performCleanup() {
 	connections := c.pool.getAllConnections()
 
 	for _, conn := range connections {
-		// 使用线程安全的方法检查连接是否在使用中
+		// Use thread-safe method to check if connection is in use
 		if conn.IsInUse() {
 			continue
 		}
 
 		shouldClose := false
 
-		// 检查是否过期
+		// Check if expired
 		if conn.IsExpired(c.config.MaxLifetime) {
 			shouldClose = true
 		}
 
-		// 检查是否空闲太久
+		// Check if idle too long
 		if !shouldClose && conn.IsIdleTooLong(c.config.IdleTimeout) {
 			shouldClose = true
 		}
 
-		// 检查是否不健康（使用线程安全的方法）
+		// Check if unhealthy (use thread-safe method)
 		if !shouldClose && c.config.EnableHealthCheck && !conn.GetHealthStatus() {
 			shouldClose = true
 		}
 
 		if shouldClose {
-			// 尝试从空闲连接池中移除
+			// Try to remove from idle pool
 			removed := c.removeFromIdlePool(conn)
-			// 再次检查连接是否在使用中（使用线程安全的方法）
+			// Check again if connection is in use (use thread-safe method)
 			if removed || !conn.IsInUse() {
 				c.pool.closeConnection(conn)
 			}
 		}
 	}
 
-	// 确保空闲连接数不超过MaxIdleConnections
+	// Ensure idle connection count doesn't exceed MaxIdleConnections
 	c.enforceMaxIdleConnections()
 }
 
-// removeFromIdlePool 从空闲连接池中移除连接
-// 注意：由于通道的特性，我们无法直接移除通道中的特定连接
-// 这个方法标记连接无效，当从通道取出时会被验证并关闭
-// 返回false表示连接可能在通道中，需要在取出时验证
+// removeFromIdlePool removes connection from idle pool
+// Note: Due to channel characteristics, we cannot directly remove specific connections from channel
+// This method marks connection as invalid, which will be validated and closed when taken from channel
+// Returns false indicating connection may be in channel, needs validation when taken
 func (c *CleanupManager) removeFromIdlePool(conn *Connection) bool {
-	// 标记连接为不健康，这样在Get时会被验证并关闭
+	// Mark connection as unhealthy, so it will be validated and closed during Get
 	conn.UpdateHealth(false)
-	// 由于无法直接从通道中移除，返回false
-	// 连接会在下次从通道取出时因验证失败而被关闭
+	// Since we cannot directly remove from channel, return false
+	// Connection will be closed when taken from channel due to validation failure
 	return false
 }
 
-// enforceMaxIdleConnections 强制限制空闲连接数
+// enforceMaxIdleConnections enforces max idle connection limit
 func (c *CleanupManager) enforceMaxIdleConnections() {
 	if c.pool.statsCollector == nil {
 		return
 	}
 
-	// 获取连接快照
+	// Get connection snapshot
 	connections := c.pool.getAllConnections()
 
-	// 统计实际空闲连接数（需要重新检查，因为状态可能已改变）
+	// Count actual idle connections (need to recheck as state may have changed)
 	idleConns := make([]*Connection, 0)
 	for _, conn := range connections {
-		// 再次检查连接状态（使用线程安全方法）
+		// Recheck connection state (use thread-safe method)
 		if !conn.IsInUse() {
 			idleConns = append(idleConns, conn)
 		}
 	}
 
-	// 使用实际空闲连接数，而不是统计信息
+	// Use actual idle connection count instead of statistics
 	idleCount := len(idleConns)
 	if idleCount <= c.config.MaxIdleConnections {
 		return
 	}
 
-	// 计算需要关闭的连接数
+	// Calculate number of connections to close
 	excess := idleCount - c.config.MaxIdleConnections
 
-	// 限制关闭数量，避免一次性关闭过多连接
+	// Limit number of connections to close to avoid closing too many at once
 	if excess > len(idleConns) {
 		excess = len(idleConns)
 	}
 
-	// 找出空闲时间最长的连接，优先关闭
+	// Find connections with longest idle time, close them first
 	toClose := make([]*Connection, 0, excess)
 	for len(toClose) < excess && len(idleConns) > 0 {
 		maxIdx := 0
@@ -200,24 +200,24 @@ func (c *CleanupManager) enforceMaxIdleConnections() {
 			}
 		}
 		toClose = append(toClose, idleConns[maxIdx])
-		// 移除已选中的连接
+		// Remove selected connection
 		idleConns = append(idleConns[:maxIdx], idleConns[maxIdx+1:]...)
 	}
 
-	// 标记为不健康并关闭
+	// Mark as unhealthy and close
 	closedCount := 0
 	for _, conn := range toClose {
-		// 再次检查连接是否在使用中（防止在排序期间被获取）
+		// Recheck if connection is in use (prevent being obtained during sorting)
 		if !conn.IsInUse() {
 			conn.UpdateHealth(false)
-			// 尝试关闭连接（可能在通道中，会在下次取出时验证失败而被关闭）
+			// Try to close connection (may be in channel, will be closed when taken due to validation failure)
 			if err := c.pool.closeConnection(conn); err == nil {
 				closedCount++
 			}
 		}
 	}
 
-	// 更新空闲连接统计 - 使用实际关闭的连接数
+	// Update idle connection statistics - use actual closed connection count
 	if closedCount > 0 && c.pool.statsCollector != nil {
 		c.pool.statsCollector.IncrementCurrentIdleConnections(int64(-closedCount))
 	}

@@ -33,19 +33,19 @@ import (
 	"strings"
 )
 
-// Protocol 协议类型
+// Protocol protocol type
 type Protocol int
 
 const (
-	// ProtocolUnknown 未知协议
+	// ProtocolUnknown unknown protocol
 	ProtocolUnknown Protocol = iota
-	// ProtocolTCP TCP协议
+	// ProtocolTCP TCP protocol
 	ProtocolTCP
-	// ProtocolUDP UDP协议
+	// ProtocolUDP UDP protocol
 	ProtocolUDP
 )
 
-// String 返回协议的字符串表示
+// String returns protocol string representation
 func (p Protocol) String() string {
 	switch p {
 	case ProtocolTCP:
@@ -57,14 +57,14 @@ func (p Protocol) String() string {
 	}
 }
 
-// DetectProtocol 检测连接的协议类型
-// 支持TCP和UDP连接
+// DetectProtocol detects connection protocol type
+// Supports TCP and UDP connections
 func DetectProtocol(conn net.Conn) Protocol {
 	if conn == nil {
 		return ProtocolUnknown
 	}
 
-	// 通过地址类型判断协议
+	// Determine protocol by address type
 	remoteAddr := conn.RemoteAddr()
 	if remoteAddr == nil {
 		localAddr := conn.LocalAddr()
@@ -77,7 +77,7 @@ func DetectProtocol(conn net.Conn) Protocol {
 	return detectProtocolFromAddr(remoteAddr)
 }
 
-// detectProtocolFromAddr 从地址判断协议类型
+// detectProtocolFromAddr determines protocol type from address
 func detectProtocolFromAddr(addr net.Addr) Protocol {
 	switch addr.(type) {
 	case *net.TCPAddr:
@@ -85,7 +85,7 @@ func detectProtocolFromAddr(addr net.Addr) Protocol {
 	case *net.UDPAddr:
 		return ProtocolUDP
 	default:
-		// 尝试从网络字符串判断
+		// Try to determine from network string
 		network := addr.Network()
 		switch strings.ToLower(network) {
 		case "tcp", "tcp4", "tcp6":
@@ -93,7 +93,7 @@ func detectProtocolFromAddr(addr net.Addr) Protocol {
 		case "udp", "udp4", "udp6":
 			return ProtocolUDP
 		default:
-			// 检查地址字符串中是否包含协议标识
+			// Check if address string contains protocol identifier
 			addrStr := addr.String()
 			if strings.Contains(addrStr, "tcp") {
 				return ProtocolTCP
@@ -106,7 +106,7 @@ func detectProtocolFromAddr(addr net.Addr) Protocol {
 	return ProtocolUnknown
 }
 
-// ParseProtocol 从字符串解析协议类型
+// ParseProtocol parses protocol type from string
 func ParseProtocol(s string) Protocol {
 	switch strings.ToUpper(s) {
 	case "TCP":
@@ -118,12 +118,12 @@ func ParseProtocol(s string) Protocol {
 	}
 }
 
-// IsTCP 检查是否为TCP协议
+// IsTCP checks if TCP protocol
 func (p Protocol) IsTCP() bool {
 	return p == ProtocolTCP
 }
 
-// IsUDP 检查是否为UDP协议
+// IsUDP checks if UDP protocol
 func (p Protocol) IsUDP() bool {
 	return p == ProtocolUDP
 }

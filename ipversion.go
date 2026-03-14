@@ -32,11 +32,11 @@ import (
 	"net"
 )
 
-// IPVersion IP版本类型
+// IPVersion IP version type
 type IPVersion int
 
 const (
-	// IPVersionUnknown 未知IP版本
+	// IPVersionUnknown unknown IP version
 	IPVersionUnknown IPVersion = iota
 	// IPVersionIPv4 IPv4
 	IPVersionIPv4
@@ -44,7 +44,7 @@ const (
 	IPVersionIPv6
 )
 
-// String 返回IP版本的字符串表示
+// String returns IP version string representation
 func (v IPVersion) String() string {
 	switch v {
 	case IPVersionIPv4:
@@ -56,9 +56,9 @@ func (v IPVersion) String() string {
 	}
 }
 
-// DetectIPVersion 检测连接的IP版本
-// 如果conn是net.Conn类型，则检测其远程地址的IP版本
-// 否则返回IPVersionUnknown
+// DetectIPVersion detects connection IP version
+// If conn is net.Conn type, detects IP version of its remote address
+// Otherwise returns IPVersionUnknown
 func DetectIPVersion(conn net.Conn) IPVersion {
 	if conn == nil {
 		return IPVersionUnknown
@@ -85,7 +85,7 @@ func DetectIPVersion(conn net.Conn) IPVersion {
 			return IPVersionIPv6
 		}
 	default:
-		// 尝试从地址字符串解析
+		// Try to parse from address string
 		host, _, err := net.SplitHostPort(addr.String())
 		if err == nil && host != "" {
 			ip := net.ParseIP(host)
@@ -101,7 +101,7 @@ func DetectIPVersion(conn net.Conn) IPVersion {
 	return IPVersionUnknown
 }
 
-// ParseIPVersion 从字符串解析IP版本
+// ParseIPVersion parses IP version from string
 func ParseIPVersion(s string) IPVersion {
 	switch s {
 	case "IPv4", "ipv4", "4":

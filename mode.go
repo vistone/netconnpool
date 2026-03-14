@@ -28,17 +28,17 @@
 
 package netconnpool
 
-// PoolMode 连接池模式
+// PoolMode connection pool mode
 type PoolMode int
 
 const (
-	// PoolModeClient 客户端模式：主动连接到服务器
+	// PoolModeClient client mode: actively connect to server
 	PoolModeClient PoolMode = iota
-	// PoolModeServer 服务器端模式：接受客户端连接
+	// PoolModeServer server mode: accept client connections
 	PoolModeServer
 )
 
-// String 返回模式字符串表示
+// String returns mode string representation
 func (m PoolMode) String() string {
 	switch m {
 	case PoolModeClient:
@@ -50,7 +50,7 @@ func (m PoolMode) String() string {
 	}
 }
 
-// ParsePoolMode 从字符串解析连接池模式
+// ParsePoolMode parses connection pool mode from string
 func ParsePoolMode(s string) PoolMode {
 	switch s {
 	case "client":
@@ -58,6 +58,6 @@ func ParsePoolMode(s string) PoolMode {
 	case "server":
 		return PoolModeServer
 	default:
-		return PoolModeClient // 默认客户端模式
+		return PoolModeClient // Default client mode
 	}
 }

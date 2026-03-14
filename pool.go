@@ -35,12 +35,12 @@ import (
 	"time"
 )
 
-// Pool 连接池
+// Pool is a network connection pool
 type Pool struct {
 	config      *Config
-	connections map[uint64]*Connection // 所有连接（使用map实现O(1)查找）
+	connections map[uint64]*Connection // all connections (O(1) lookup using map)
 
-	// 分离的空闲连接通道，避免协议混淆导致的性能抖动
+	// Separate idle connection channels to avoid protocol confusion and performance jitter
 	idleTCPConnections chan *Connection
 	idleUDPConnections chan *Connection
 
@@ -49,30 +49,30 @@ type Pool struct {
 	closeOnce sync.Once
 	closeChan chan struct{}
 
-	// 管理器
+	// Managers
 	healthCheckManager *HealthCheckManager
 	cleanupManager     *CleanupManager
 	leakDetector       *LeakDetector
 
-	// 统计
+	// Statistics
 	statsCollector *StatsCollector
 
-	// 等待队列（当连接池耗尽时）
+	// Wait queue (when pool is exhausted)
 	waitQueue chan chan *Connection
 
-	// IP版本特定的等待队列
+	// IP version specific wait queues
 	waitQueueIPv4 chan chan *Connection
 	waitQueueIPv6 chan chan *Connection
 
-	// 协议特定的等待队列
+	// Protocol specific wait queues
 	waitQueueTCP chan chan *Connection
 	waitQueueUDP chan chan *Connection
 
-	// 同步原语
-	createSemaphore chan struct{} // 限制并发创建连接数
+	// Synchronization primitives
+	createSemaphore chan struct{} // limits concurrent connection creation
 }
 
-// NewPool 创建新的连接池
+// NewPool creates a new connection pool
 func NewPool(config *Config) (*Pool, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
@@ -85,68 +85,68 @@ func NewPool(config *Config) (*Pool, error) {
 		idleUDPConnections: make(chan *Connection, config.MaxIdleConnections),
 		closed:             false,
 		closeChan:          make(chan struct{}),
-		waitQueue:          make(chan chan *Connection, 100), // 等待队列缓冲区
-		waitQueueIPv4:      make(chan chan *Connection, 100), // IPv4等待队列
-		waitQueueIPv6:      make(chan chan *Connection, 100), // IPv6等待队列
-		waitQueueTCP:       make(chan chan *Connection, 100), // TCP等待队列
-		waitQueueUDP:       make(chan chan *Connection, 100), // UDP等待队列
-		createSemaphore:    make(chan struct{}, 5),           // 最多5个并发创建连接
+		waitQueue:          make(chan chan *Connection, 100), // wait queue buffer
+		waitQueueIPv4:      make(chan chan *Connection, 100), // IPv4 wait queue
+		waitQueueIPv6:      make(chan chan *Connection, 100), // IPv6 wait queue
+		waitQueueTCP:       make(chan chan *Connection, 100), // TCP wait queue
+		waitQueueUDP:       make(chan chan *Connection, 100), // UDP wait queue
+		createSemaphore:    make(chan struct{}, 5),           // max 5 concurrent connection creations
 	}
 
-	// 初始化统计收集器
+	// Initialize stats collector
 	if config.EnableStats {
 		pool.statsCollector = NewStatsCollector()
 	}
 
-	// 初始化健康检查管理器
+	// Initialize health check manager
 	pool.healthCheckManager = NewHealthCheckManager(pool, config)
 
-	// 初始化清理管理器
+	// Initialize cleanup manager
 	pool.cleanupManager = NewCleanupManager(pool, config)
 
-	// 初始化泄漏检测器
+	// Initialize leak detector
 	pool.leakDetector = NewLeakDetector(pool, config)
 
-	// 预热连接池
+	// Warm up the connection pool
 	if err := pool.warmUp(); err != nil {
 		return nil, err
 	}
 
-	// 启动后台任务
+	// Start background tasks
 	pool.startBackgroundTasks()
 
 	return pool, nil
 }
 
-// Get 获取一个连接（自动选择IP版本）
+// Get gets a connection (automatically selects IP version)
 func (p *Pool) Get(ctx context.Context) (*Connection, error) {
 	return p.GetWithTimeout(ctx, p.config.GetConnectionTimeout)
 }
 
-// GetIPv4 获取一个IPv4连接
+// GetIPv4 gets an IPv4 connection
 func (p *Pool) GetIPv4(ctx context.Context) (*Connection, error) {
 	return p.GetWithIPVersion(ctx, IPVersionIPv4, p.config.GetConnectionTimeout)
 }
 
-// GetIPv6 获取一个IPv6连接
+// GetIPv6 gets an IPv6 connection
 func (p *Pool) GetIPv6(ctx context.Context) (*Connection, error) {
 	return p.GetWithIPVersion(ctx, IPVersionIPv6, p.config.GetConnectionTimeout)
 }
 
-// GetTCP 获取一个TCP连接
+// GetTCP gets a TCP connection
 func (p *Pool) GetTCP(ctx context.Context) (*Connection, error) {
 	return p.GetWithProtocol(ctx, ProtocolTCP, p.config.GetConnectionTimeout)
 }
 
-// GetUDP 获取一个UDP连接
+// GetUDP gets a UDP connection
 func (p *Pool) GetUDP(ctx context.Context) (*Connection, error) {
 	return p.GetWithProtocol(ctx, ProtocolUDP, p.config.GetConnectionTimeout)
 }
 
-// GetWithProtocol 获取指定协议的连接
+// GetWithProtocol gets a connection with specified protocol
 func (p *Pool) GetWithProtocol(ctx context.Context, protocol Protocol, timeout time.Duration) (*Connection, error) {
 	if protocol == ProtocolUnknown {
-		// 如果指定了未知协议，回退到默认行为
+		// Fall back to default behavior if unknown protocol is specified
 		return p.GetWithTimeout(ctx, timeout)
 	}
 
@@ -162,14 +162,14 @@ func (p *Pool) GetWithProtocol(ctx context.Context, protocol Protocol, timeout t
 		}()
 	}
 
-	// 创建带超时的上下文
+	// Create context with timeout
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 
-	// 确定要使用的空闲通道
+	// Determine which idle channel to use
 	var idleChan chan *Connection
 	if protocol == ProtocolTCP {
 		idleChan = p.idleTCPConnections
@@ -177,42 +177,42 @@ func (p *Pool) GetWithProtocol(ctx context.Context, protocol Protocol, timeout t
 		idleChan = p.idleUDPConnections
 	}
 
-	// 尝试获取指定协议的连接
-	maxAttempts := 10          // 最多尝试10次
-	protocolMismatchCount := 0 // 跟踪协议不匹配的次数
-	createFailedCount := 0     // 跟踪创建连接失败的次数
+	// Try to get a connection of the specified protocol
+	maxAttempts := 10          // max 10 attempts
+	protocolMismatchCount := 0 // track protocol mismatch count
+	createFailedCount := 0     // track connection creation failure count
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		// 检查连接池是否已关闭
+		// Check if pool is closed
 		if p.isClosed() {
 			return nil, ErrPoolClosed
 		}
 
-		// 尝试从空闲连接池获取指定协议的连接
+		// Try to get a connection of the specified protocol from idle pool
 		select {
 		case conn := <-idleChan:
 			if conn == nil {
 				continue
 			}
 
-			// 检查连接是否有效
+			// Check if connection is valid
 			if !p.isConnectionValid(conn) {
 				p.closeConnection(conn)
 				continue
 			}
 
-			// 检查协议是否匹配
+			// Check if protocol matches
 			if conn.GetProtocol() != protocol {
-				// 协议不匹配，归还到正确的池并继续
+				// Protocol mismatch, return to correct pool and continue
 				p.Put(conn)
 				continue
 			}
 
-			// 标记为使用中，并记录连接复用
+			// Mark as in use and record connection reuse
 			conn.MarkInUse()
-			conn.IncrementReuseCount() // 增加复用计数
+			conn.IncrementReuseCount() // increment reuse count
 
-			// 调用借出钩子
+			// Call borrow hook
 			if p.config.OnBorrow != nil {
 				p.config.OnBorrow(conn.GetConn())
 			}
@@ -221,8 +221,8 @@ func (p *Pool) GetWithProtocol(ctx context.Context, protocol Protocol, timeout t
 				p.statsCollector.IncrementSuccessfulGets()
 				p.statsCollector.IncrementCurrentActiveConnections(1)
 				p.statsCollector.IncrementCurrentIdleConnections(-1)
-				p.statsCollector.IncrementTotalConnectionsReused() // 记录连接复用
-				// 更新协议空闲连接统计
+				p.statsCollector.IncrementTotalConnectionsReused() // record connection reuse
+				// Update protocol idle connection statistics
 				switch conn.GetProtocol() {
 				case ProtocolTCP:
 					p.statsCollector.IncrementCurrentTCPIdleConnections(-1)
@@ -233,23 +233,23 @@ func (p *Pool) GetWithProtocol(ctx context.Context, protocol Protocol, timeout t
 
 			return conn, nil
 		default:
-			// 空闲连接池为空，尝试创建新连接
+			// Idle pool is empty, try to create new connection
 		}
 
-		// 检查是否已达到最大连接数
+		// Check if max connections reached
 		if p.config.MaxConnections > 0 {
 			current := p.getCurrentConnectionsCount()
 			if current >= p.config.MaxConnections {
-				// 等待可用连接或超时
+				// Wait for available connection or timeout
 				return p.waitForConnectionWithProtocol(ctx, protocol)
 			}
 		}
 
-		// 创建新连接
+		// Create new connection
 		conn, err := p.createConnection(ctx)
 		if err != nil {
 			createFailedCount++
-			// 如果创建连接多次失败，返回错误避免无限循环
+			// Return error if connection creation fails multiple times to avoid infinite loop
 			if createFailedCount >= 3 {
 				if p.statsCollector != nil {
 					p.statsCollector.IncrementFailedGets()
@@ -257,7 +257,7 @@ func (p *Pool) GetWithProtocol(ctx context.Context, protocol Protocol, timeout t
 				}
 				return nil, err
 			}
-			// 短暂延迟后重试
+			// Retry after short delay
 			select {
 			case <-time.After(10 * time.Millisecond):
 				continue
@@ -266,7 +266,7 @@ func (p *Pool) GetWithProtocol(ctx context.Context, protocol Protocol, timeout t
 			}
 		}
 
-		// 创建连接成功但返回nil（不应该发生），添加保护
+		// Connection created successfully but returned nil (shouldn't happen), add protection
 		if conn == nil {
 			if p.statsCollector != nil {
 				p.statsCollector.IncrementFailedGets()
@@ -274,11 +274,11 @@ func (p *Pool) GetWithProtocol(ctx context.Context, protocol Protocol, timeout t
 			return nil, ErrInvalidConnection
 		}
 
-		// 检查协议是否匹配（理论上createConnection应该返回正确的协议，但为了安全）
+		// Check if protocol matches (theoretically createConnection should return correct protocol, but for safety)
 		if conn.GetProtocol() == protocol {
 			conn.MarkInUse()
 
-			// 调用借出钩子
+			// Call borrow hook
 			if p.config.OnBorrow != nil {
 				p.config.OnBorrow(conn.GetConn())
 			}
@@ -291,18 +291,18 @@ func (p *Pool) GetWithProtocol(ctx context.Context, protocol Protocol, timeout t
 			return conn, nil
 		}
 
-		// 协议不匹配，归还连接
+		// Protocol mismatch, return connection
 		protocolMismatchCount++
 		p.Put(conn)
 
-		// 如果连续多次不匹配，返回错误，避免无限循环
+		// Return error if multiple consecutive mismatches to avoid infinite loop
 		if protocolMismatchCount >= 3 {
 			if p.statsCollector != nil {
 				p.statsCollector.IncrementFailedGets()
 			}
 			return nil, ErrNoConnectionForProtocol
 		}
-		// 继续循环尝试
+		// Continue loop attempt
 	}
 
 	if p.statsCollector != nil {
@@ -311,7 +311,7 @@ func (p *Pool) GetWithProtocol(ctx context.Context, protocol Protocol, timeout t
 	return nil, ErrNoConnectionForProtocol
 }
 
-// GetWithIPVersion 获取指定IP版本的连接
+// GetWithIPVersion gets a connection with specified IP version
 func (p *Pool) GetWithIPVersion(ctx context.Context, ipVersion IPVersion, timeout time.Duration) (*Connection, error) {
 	if ipVersion == IPVersionUnknown {
 		return p.GetWithTimeout(ctx, timeout)
@@ -336,27 +336,27 @@ func (p *Pool) GetWithIPVersion(ctx context.Context, ipVersion IPVersion, timeou
 	}
 
 	maxAttempts := 10
-	ipVersionMismatchCount := 0 // 跟踪IP版本不匹配的次数
+	ipVersionMismatchCount := 0 // track IP version mismatch count
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if p.isClosed() {
 			return nil, ErrPoolClosed
 		}
 
-		// 尝试从两个空闲池中获取
+		// Try to get from both idle pools
 		var conn *Connection
 		select {
 		case conn = <-p.idleTCPConnections:
 		case conn = <-p.idleUDPConnections:
 		default:
-			// 都没有空闲
+			// No idle connections available
 		}
 
 		if conn != nil {
-			// 检查IP版本是否匹配
+			// Check if IP version matches
 			if conn.GetIPVersion() != ipVersion {
 				p.Put(conn)
 				ipVersionMismatchCount++
-				// 如果连续多次不匹配，返回错误，避免无限循环
+				// Return error if multiple consecutive mismatches to avoid infinite loop
 				if ipVersionMismatchCount >= 3 {
 					if p.statsCollector != nil {
 						p.statsCollector.IncrementFailedGets()
@@ -400,7 +400,7 @@ func (p *Pool) GetWithIPVersion(ctx context.Context, ipVersion IPVersion, timeou
 			return conn, nil
 		}
 
-		// 尝试创建
+		// Try to create
 		if p.config.MaxConnections > 0 {
 			current := p.getCurrentConnectionsCount()
 			if current >= p.config.MaxConnections {
@@ -418,7 +418,7 @@ func (p *Pool) GetWithIPVersion(ctx context.Context, ipVersion IPVersion, timeou
 		}
 
 		if conn == nil {
-			// 不应该发生，但添加保护防止无限循环
+			// Shouldn't happen, but add protection to prevent infinite loop
 			if p.statsCollector != nil {
 				p.statsCollector.IncrementFailedGets()
 				p.statsCollector.IncrementConnectionErrors()
@@ -438,11 +438,11 @@ func (p *Pool) GetWithIPVersion(ctx context.Context, ipVersion IPVersion, timeou
 			return conn, nil
 		}
 
-		// IP版本不匹配，归还连接
+		// IP version mismatch, return connection
 		ipVersionMismatchCount++
 		p.Put(conn)
 
-		// 如果连续多次不匹配，返回错误，避免无限循环
+		// Return error if multiple consecutive mismatches to avoid infinite loop
 		if ipVersionMismatchCount >= 3 {
 			if p.statsCollector != nil {
 				p.statsCollector.IncrementFailedGets()
@@ -457,7 +457,7 @@ func (p *Pool) GetWithIPVersion(ctx context.Context, ipVersion IPVersion, timeou
 	return nil, ErrNoConnectionForIPVersion
 }
 
-// GetWithTimeout 获取一个连接（带超时，自动选择IP版本）
+// GetWithTimeout gets a connection (with timeout, automatically selects IP version)
 func (p *Pool) GetWithTimeout(ctx context.Context, timeout time.Duration) (*Connection, error) {
 	if p.isClosed() {
 		return nil, ErrPoolClosed
@@ -482,7 +482,7 @@ func (p *Pool) GetWithTimeout(ctx context.Context, timeout time.Duration) (*Conn
 			return nil, ErrPoolClosed
 		}
 
-		// 尝试从任意空闲池获取
+		// Try to get from any idle pool
 		var conn *Connection
 		select {
 		case conn = <-p.idleTCPConnections:
@@ -545,7 +545,7 @@ func (p *Pool) GetWithTimeout(ctx context.Context, timeout time.Duration) (*Conn
 		}
 
 		if conn == nil {
-			// 不应该发生，但添加保护防止无限循环
+			// Shouldn't happen, but add protection to prevent infinite loop
 			if p.statsCollector != nil {
 				p.statsCollector.IncrementFailedGets()
 				p.statsCollector.IncrementConnectionErrors()
@@ -565,7 +565,7 @@ func (p *Pool) GetWithTimeout(ctx context.Context, timeout time.Duration) (*Conn
 	}
 }
 
-// Put 归还连接
+// Put returns a connection
 func (p *Pool) Put(conn *Connection) error {
 	if conn == nil {
 		return ErrInvalidConnection
@@ -579,7 +579,7 @@ func (p *Pool) Put(conn *Connection) error {
 		return p.closeConnection(conn)
 	}
 
-	// 调用归还钩子
+	// Call return hook
 	if p.config.OnReturn != nil {
 		p.config.OnReturn(conn.GetConn())
 	}
@@ -598,7 +598,7 @@ func (p *Pool) Put(conn *Connection) error {
 		p.statsCollector.IncrementCurrentActiveConnections(-1)
 	}
 
-	// 确定归还到哪个通道
+	// Determine which channel to return to
 	var idleChan chan *Connection
 	if conn.GetProtocol() == ProtocolTCP {
 		idleChan = p.idleTCPConnections
@@ -631,7 +631,7 @@ func (p *Pool) Put(conn *Connection) error {
 	}
 }
 
-// Close 关闭连接池
+// Close closes the connection pool
 func (p *Pool) Close() error {
 	var err error
 	p.closeOnce.Do(func() {
@@ -662,24 +662,24 @@ func (p *Pool) Close() error {
 			}
 		}
 
-		// 清理等待队列
+		// Clean up wait queues
 		closeWaitQueue := func(q chan chan *Connection) {
 			defer func() {
-				// 恢复可能的 panic（例如关闭已关闭的 channel）
-				// 这是预期的行为，因为 channel 可能已经被关闭
+				// Recover from possible panic (e.g., closing closed channel)
+				// This is expected behavior because channel may have been closed
 				if r := recover(); r != nil {
-					// 预期的 panic：关闭已关闭的 channel
-					// 不重新抛出，确保其他资源能够被清理
+					// Expected panic: closing closed channel
+					// Don't rethrow, ensure other resources can be cleaned up
 					_ = r
 				}
 			}()
 			for {
 				select {
 				case waitChan := <-q:
-					// 安全关闭 waitChan
+					// Safely close waitChan
 					func() {
 						defer func() {
-							// 预期的 panic：向已关闭的 channel 发送数据或关闭已关闭的 channel
+							// Expected panic: sending to closed channel or closing closed channel
 							if r := recover(); r != nil {
 								_ = r
 							}
@@ -687,11 +687,11 @@ func (p *Pool) Close() error {
 						close(waitChan)
 					}()
 				default:
-					// 尝试关闭队列 channel
+					// Try to close queue channel
 					func() {
 						defer func() {
 							if r := recover(); r != nil {
-								// 预期的 panic：关闭已关闭的 channel
+								// Expected panic: closing closed channel
 								_ = r
 							}
 						}()
@@ -708,7 +708,7 @@ func (p *Pool) Close() error {
 		closeWaitQueue(p.waitQueueTCP)
 		closeWaitQueue(p.waitQueueUDP)
 
-		// 清理空闲连接通道
+		// Clean up idle connection channels
 		closeIdleChan := func(c chan *Connection) {
 			for {
 				select {
@@ -725,7 +725,7 @@ func (p *Pool) Close() error {
 	return err
 }
 
-// Stats 获取统计信息
+// Stats gets statistics
 func (p *Pool) Stats() Stats {
 	if p.statsCollector == nil {
 		return Stats{}
@@ -733,7 +733,7 @@ func (p *Pool) Stats() Stats {
 	return p.statsCollector.GetStats()
 }
 
-// createConnection 创建新连接
+// createConnection creates a new connection
 func (p *Pool) createConnection(ctx context.Context) (*Connection, error) {
 	select {
 	case p.createSemaphore <- struct{}{}:
@@ -785,7 +785,7 @@ func (p *Pool) createConnection(ctx context.Context) (*Connection, error) {
 		return nil, err
 	}
 
-	// 调用创建钩子
+	// Call creation hook
 	if p.config.OnCreated != nil {
 		if err := p.config.OnCreated(conn); err != nil {
 			conn.Close()
@@ -826,7 +826,7 @@ func (p *Pool) createConnection(ctx context.Context) (*Connection, error) {
 	return connection, nil
 }
 
-// createCloseFunc 创建关闭函数
+// createCloseFunc creates close function
 func (p *Pool) createCloseFunc(conn net.Conn) func() error {
 	return func() error {
 		if p.config.CloseConn != nil {
@@ -836,16 +836,16 @@ func (p *Pool) createCloseFunc(conn net.Conn) func() error {
 	}
 }
 
-// closeConnection 关闭连接
+// closeConnection closes a connection
 func (p *Pool) closeConnection(conn *Connection) error {
 	if conn == nil {
 		return nil
 	}
 
-	// 先标记连接为不健康，防止被复用
+	// Mark connection as unhealthy first to prevent reuse
 	conn.UpdateHealth(false)
 
-	// 从map删除 - 在关闭连接之前删除，避免竞态条件
+	// Delete from map - delete before closing connection to avoid race condition
 	p.mu.Lock()
 	_, exists := p.connections[conn.ID]
 	if exists {
@@ -853,11 +853,11 @@ func (p *Pool) closeConnection(conn *Connection) error {
 	}
 	p.mu.Unlock()
 
-	// 然后关闭连接，确保连接不可用
-	// 注意：在删除map后再关闭连接，避免其他goroutine在关闭期间获取到该连接
+	// Then close connection to ensure it's unavailable
+	// Note: close connection after deleting from map to prevent other goroutines from getting it during closing
 	err := conn.Close()
 
-	// 更新统计信息
+	// Update statistics
 	if p.statsCollector != nil && exists {
 		p.statsCollector.IncrementTotalConnectionsClosed()
 		ipVersion := conn.GetIPVersion()
@@ -879,7 +879,7 @@ func (p *Pool) closeConnection(conn *Connection) error {
 	return err
 }
 
-// isConnectionValid 检查连接是否有效
+// isConnectionValid checks if connection is valid
 func (p *Pool) isConnectionValid(conn *Connection) bool {
 	if conn == nil || conn.GetConn() == nil {
 		return false
@@ -896,14 +896,14 @@ func (p *Pool) isConnectionValid(conn *Connection) bool {
 	return true
 }
 
-// waitForConnection 等待可用连接
+// waitForConnection waits for an available connection
 func (p *Pool) waitForConnection(ctx context.Context) (*Connection, error) {
 	waitChan := make(chan *Connection, 1)
 	defer close(waitChan)
 
 	select {
 	case p.waitQueue <- waitChan:
-		// 成功加入等待队列，等待连接
+		// Successfully joined wait queue, wait for connection
 		for {
 			select {
 			case conn := <-waitChan:
@@ -932,14 +932,14 @@ func (p *Pool) waitForConnection(ctx context.Context) (*Connection, error) {
 					}
 					return conn, nil
 				}
-				// 连接无效，关闭它并继续等待下一个连接
-				// 注意：这里不返回错误，而是继续等待，因为可能会有其他连接归还
+				// Connection invalid, close it and continue waiting for next connection
+				// Note: don't return error here, continue waiting as other connections may be returned
 				if conn != nil {
 					p.closeConnection(conn)
 				}
 				continue
 			case <-ctx.Done():
-				// 检查waitChan中是否有数据，避免通知者阻塞
+				// Check if there's data in waitChan to avoid blocking notifier
 				select {
 				case <-waitChan:
 				default:
@@ -949,7 +949,7 @@ func (p *Pool) waitForConnection(ctx context.Context) (*Connection, error) {
 				}
 				return nil, ErrGetConnectionTimeout
 			case <-p.closeChan:
-				// 检查waitChan中是否有数据，避免通知者阻塞
+				// Check if there's data in waitChan to avoid blocking notifier
 				select {
 				case <-waitChan:
 				default:
@@ -967,7 +967,7 @@ func (p *Pool) waitForConnection(ctx context.Context) (*Connection, error) {
 	}
 }
 
-// waitForConnectionWithProtocol 等待指定协议的可用连接
+// waitForConnectionWithProtocol waits for an available connection with specified protocol
 func (p *Pool) waitForConnectionWithProtocol(ctx context.Context, protocol Protocol) (*Connection, error) {
 	var waitQueue chan chan *Connection
 	switch protocol {
@@ -984,7 +984,7 @@ func (p *Pool) waitForConnectionWithProtocol(ctx context.Context, protocol Proto
 
 	select {
 	case waitQueue <- waitChan:
-		// 成功加入等待队列，等待连接
+		// Successfully joined wait queue, wait for connection
 		for {
 			select {
 			case conn := <-waitChan:
@@ -1007,13 +1007,13 @@ func (p *Pool) waitForConnectionWithProtocol(ctx context.Context, protocol Proto
 					}
 					return conn, nil
 				}
-				// 连接无效或协议不匹配，关闭它并继续等待
+				// Connection invalid or protocol mismatch, close it and continue waiting
 				if conn != nil {
 					p.closeConnection(conn)
 				}
 				continue
 			case <-ctx.Done():
-				// 检查waitChan中是否有数据，避免通知者阻塞
+				// Check if there's data in waitChan to avoid blocking notifier
 				select {
 				case <-waitChan:
 				default:
@@ -1023,7 +1023,7 @@ func (p *Pool) waitForConnectionWithProtocol(ctx context.Context, protocol Proto
 				}
 				return nil, ErrGetConnectionTimeout
 			case <-p.closeChan:
-				// 检查waitChan中是否有数据，避免通知者阻塞
+				// Check if there's data in waitChan to avoid blocking notifier
 				select {
 				case <-waitChan:
 				default:
@@ -1041,7 +1041,7 @@ func (p *Pool) waitForConnectionWithProtocol(ctx context.Context, protocol Proto
 	}
 }
 
-// notifyWaitQueue 通知等待队列
+// notifyWaitQueue notifies wait queue
 func (p *Pool) notifyWaitQueue(conn *Connection) {
 	protocol := conn.GetProtocol()
 	ipVersion := conn.GetIPVersion()
@@ -1069,16 +1069,16 @@ func (p *Pool) notifyWaitQueue(conn *Connection) {
 	p.notifySpecificWaitQueue(p.waitQueue, conn)
 }
 
-// notifySpecificWaitQueue 通知特定的等待队列
+// notifySpecificWaitQueue notifies a specific wait queue
 func (p *Pool) notifySpecificWaitQueue(waitQueue chan chan *Connection, conn *Connection) bool {
 	for {
 		select {
 		case waitChan := <-waitQueue:
-			// 使用 recover 防止向已关闭的 channel 发送数据导致 panic
+			// Use recover to prevent panic when sending to closed channel
 			sent := func() (success bool) {
 				defer func() {
 					if r := recover(); r != nil {
-						// Channel 已关闭，忽略这个等待者
+						// Channel closed, ignore this waiter
 						success = false
 					}
 				}()
@@ -1093,15 +1093,15 @@ func (p *Pool) notifySpecificWaitQueue(waitQueue chan chan *Connection, conn *Co
 			if sent {
 				return true
 			}
-			// 发送失败，尝试下一个等待者
+			// Send failed, try next waiter
 		default:
-			// 没有等待的请求
+			// No waiting requests
 			return false
 		}
 	}
 }
 
-// waitForConnectionWithIPVersion 等待指定IP版本的可用连接
+// waitForConnectionWithIPVersion waits for an available connection with specified IP version
 func (p *Pool) waitForConnectionWithIPVersion(ctx context.Context, ipVersion IPVersion) (*Connection, error) {
 	var waitQueue chan chan *Connection
 	switch ipVersion {
@@ -1123,7 +1123,7 @@ func (p *Pool) waitForConnectionWithIPVersion(ctx context.Context, ipVersion IPV
 
 	select {
 	case waitQueue <- waitChan:
-		// 成功加入等待队列，等待连接
+		// Successfully joined wait queue, wait for connection
 		for {
 			select {
 			case conn := <-waitChan:
@@ -1154,7 +1154,7 @@ func (p *Pool) waitForConnectionWithIPVersion(ctx context.Context, ipVersion IPV
 					}
 					return conn, nil
 				}
-				// 连接无效或IP版本不匹配，关闭它并继续等待
+				// Connection invalid or IP version mismatch, close it and continue waiting
 				if conn != nil {
 					p.closeConnection(conn)
 				}
@@ -1186,7 +1186,7 @@ func (p *Pool) waitForConnectionWithIPVersion(ctx context.Context, ipVersion IPV
 	}
 }
 
-// warmUp 预热连接池
+// warmUp warms up the connection pool
 func (p *Pool) warmUp() error {
 	if p.config.Mode == PoolModeServer {
 		return nil
@@ -1196,7 +1196,7 @@ func (p *Pool) warmUp() error {
 		return nil
 	}
 
-	// 防止超时时间溢出，设置最大超时时间为10分钟
+	// Prevent timeout overflow, set max timeout to 10 minutes
 	maxTimeout := 10 * time.Minute
 	timeout := p.config.ConnectionTimeout * time.Duration(p.config.MinConnections)
 	if timeout > maxTimeout {
@@ -1209,30 +1209,30 @@ func (p *Pool) warmUp() error {
 	for i := 0; i < p.config.MinConnections; i++ {
 		conn, err := p.createConnection(ctx)
 		if err != nil {
-			// 预热失败，更新统计信息
+			// Warm-up failed, update statistics
 			if p.statsCollector != nil {
 				p.statsCollector.IncrementConnectionErrors()
 			}
 			continue
 		}
 
-		// 将连接放入空闲连接池
+		// Put connection into idle pool
 		if err := p.Put(conn); err != nil {
-			// Put 失败（可能是池已满），确保连接被关闭
-			// 注意：Put 方法在失败时会调用 closeConnection，
-			// 但为了确保资源被释放，这里不需要额外操作
-			// 因为 Put 内部已经处理了关闭逻辑
+			// Put failed (possibly pool is full), connection will be closed
+			// Note: Put method calls closeConnection on failure,
+			// but no extra action needed here to ensure resource release
+			// because Put already handles the close logic internally
 		} else {
 			successCount++
 		}
 	}
 
-	// 如果所有预热都失败，可以考虑返回错误（但为了兼容性，暂时不返回）
-	// 统计信息已经记录了错误，调用者可以通过统计信息了解预热情况
+	// Consider returning error if all warm-ups failed (but not returning for compatibility)
+	// Statistics have recorded errors, caller can check warm-up status via statistics
 	return nil
 }
 
-// startBackgroundTasks 启动后台任务
+// startBackgroundTasks starts background tasks
 func (p *Pool) startBackgroundTasks() {
 	if p.config.EnableHealthCheck {
 		p.healthCheckManager.Start()
@@ -1241,21 +1241,21 @@ func (p *Pool) startBackgroundTasks() {
 	p.leakDetector.Start()
 }
 
-// isClosed 检查连接池是否已关闭
+// isClosed checks if pool is closed
 func (p *Pool) isClosed() bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.closed
 }
 
-// getCurrentConnectionsCount 获取当前连接数
+// getCurrentConnectionsCount gets current connection count
 func (p *Pool) getCurrentConnectionsCount() int {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return len(p.connections)
 }
 
-// getAllConnections 获取所有连接（用于健康检查和清理）
+// getAllConnections gets all connections (for health check and cleanup)
 func (p *Pool) getAllConnections() []*Connection {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
